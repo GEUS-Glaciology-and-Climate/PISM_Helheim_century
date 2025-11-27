@@ -25,12 +25,10 @@ conda create -n dynahide -c conda-forge geopandas fiona pandas xarray cftime ras
 ** Make pism model nc files 
 *** Make bootstrappable nc file for entire Greenland
 
-**** TODO update and test: Make bootstrappable nc file for Greenland (1km)
+**** Make bootstrappable nc file for Greenland (1km)
 
-Tangle if there is changes in fill_climate_values.py
-#+BEGIN_SRC sh :results verbatim
-conda activate py38
-#+END_SRC
+Workflow:
+<< ... >> means that this is the place where code from the code subsection below is run.
 
 #+BEGIN_SRC bash :results verbatim :tangle scripts/make_PISM_netcdf.sh
 #!/bin/bash
@@ -42,7 +40,7 @@ conda activate py38
 
 # Setting the working file (the file to be created)
 PROJ_LIB=/usr/share/proj
-WORKING=pism_files/pism_greenland_1km_v3.nc
+WORKING=model_input/pism_greenland_1km_v3.nc
 
 
 # Removing earlier versions of this file in order to start from scratch
@@ -94,6 +92,7 @@ python fill_climate_values.py pism_greenland_1km_v3
 
 
 ***** Code
+greenland_resolution
 #+NAME: greenland_resolution
 #+BEGIN_SRC bash
 xres=1000
@@ -106,6 +105,7 @@ ymax=-815550
 
 #+RESULTS: greenland_resolution
 
+greenland_geometry
 #+NAME: greenland_geometry
 #+BEGIN_SRC bash :results verbatim
 DATA=$DATADIR/Morlighem_2022/BedMachineGreenland-v5.nc
@@ -143,7 +143,7 @@ rm tmp.nc
 
  #+END_SRC
 
-
+greenland_heatflux
 #+NAME: greenland_heatflux
 #+BEGIN_SRC bash
 DATA=$PISM_EXAMPLEDIR/jako/gr1km.nc #geothermal_heat_greenland.nc #
@@ -160,6 +160,7 @@ ncatted -O -a long_name,$shortname,o,c,"Basal Heat Flux" $WORKING
 rm tmp.nc
  #+END_SRC
 
+greenland_climate
 #+NAME: greenland_climate
 #+BEGIN_SRC bash
 DATA=$PISM_EXAMPLEDIR/std-greenland/Greenland_5km_v1.1.nc
@@ -193,9 +194,8 @@ ncatted -O -a standard_name,$shortname,m,c,"land_ice_surface_specific_mass_balan
 ncatted -O -a units,$shortname,m,c,"kg m-2 year-1" $WORKING
 rm tmp.nc
 #+END_SRC
--a_srs "+proj=stere +lat_0=90 +lat_ts=70 +lon_0=-45 +k=1 +x_0=0 +y_0=0 +datum=WGS84 +units=m +no_defs"
--of netCDF
 
+Set the correct crs for the shape file:
 
 #+BEGIN_SRC python
 import geopandas as gpd
@@ -211,9 +211,8 @@ gdf.to_file('shp/catchment_jan2021_3413.shp')
 
 #+END_SRC
 
-#+RESULTS:
--a_srs "+proj=stere +lat_0=90 +lat_ts=70 +lon_0=-45 +k=1 +x_0=0 +y_0=0 +datum=WGS84 +units=m +no_defs"
 
+rasterize_ftt_mask_to_helheim_nc
 #+NAME: rasterize_ftt_mask_to_helheim_nc
  #+BEGIN_SRC bash :results verbatim
 # This only works in python 2.7 due to the old netcdf3_classic format of the pism file
@@ -221,6 +220,8 @@ gdal_rasterize -burn 0 -te $xmin $ymin $xmax $ymax -tr $xres $yres -of netCDF -i
 ncap2 -s 'Band1=int(Band1)' helhmask_refined_v3.nc helhmask_refined_v3.nc -O
  #+END_SRC
 
+
+add_ftt_mask
 #+NAME: add_ftt_mask
 #+BEGIN_SRC bash
 DATA=helhmask_refined_v3.nc
@@ -236,7 +237,7 @@ rm tmp.nc
 #+END_SRC
 
 
-
+greenland_declutter
 #+NAME: greenland_declutter
 #+BEGIN_SRC bash
 # de-clutter by only keeping vars we want
@@ -247,7 +248,8 @@ ncatted -O -a projection,global,c,c,"+proj=stere +lat_0=90 +lat_ts=70 +lon_0=-45
  #+END_SRC
 
 
-#+BEGIN_SRC python :tangle fill_climate_values.py
+Code to fill empty data in netcdf file: fill_climate_values.py
+#+BEGIN_SRC python :tangle scripts/fill_climate_values.py
 import xarray as xr
 import sys
 
@@ -261,6 +263,7 @@ ds['precipitation'] = src['precipitation'].fillna(0)
 ds.to_netcdf(infile+'-filled.nc', format='NETCDF3_CLASSIC')
 ds.close()
 #+END_SRC
+
 
 #+BEGIN_SRC python
 import xarray as xr
@@ -276,10 +279,7 @@ ds.to_netcdf(infile+'-filled.nc', format='NETCDF3_CLASSIC')
 ds.close()
 #+END_SRC
 
-#+RESULTS:
-:results:
-# Out [9]: 
-:end:
+
 
 #+BEGIN_SRC bash
 chmod 755 fill_climate_values.py
@@ -362,13 +362,14 @@ df_filled['temp (C)'] = df['temp (C)'].interpolate(method = 'linear')
 df_filled['prec (mm/month)'] = df['prec (mm/month)'].ffill()
 df_filled['prec (mm/month)'] = df_filled['prec (mm/month)'].bfill()
 print(df_filled)
-df.to_csv('pism_files/forcing/csvs/dmi_tas_historical_temp_prec.csv')
-df_filled.to_csv('pism_files/forcing/csvs/dmi_tas_historical_temp_prec_ffill.csv')
+df.to_csv('model_input/forcing/csvs/dmi_tas_historical_temp_prec.csv')
+df_filled.to_csv('model_input/forcing/csvs/dmi_tas_historical_temp_prec_ffill.csv')
 #+end_src
 
 #+RESULTS:
 : None
 
+unfold_dmi_historical_data
 
 #+NAME: unfold_dmi_historical_data
 #+BEGIN_SRC python
@@ -392,7 +393,7 @@ result = pd.concat(appended)
 #+BEGIN_SRC python
 import pandas as pd
 import matplotlib.pyplot as plt
-dmi = pd.read_csv('pism_files/forcing/csvs/dmi_tas_historical_temp_prec.csv', parse_dates = True, index_col = 0)
+dmi = pd.read_csv('model_input/forcing/csvs/dmi_tas_historical_temp_prec.csv', parse_dates = True, index_col = 0)
 #print(dmi)
 
 
@@ -411,7 +412,7 @@ dmi_fill.loc['1895', 'prec (mm/month)'] = dmi_fill.loc['1896', 'prec (mm/month)'
 #dmi_fill.plot()
 #plt.show()
 dmi_fill = dmi_fill.ffill()
-dmi_fill.to_csv('pism_files/forcing/csvs/dmi_tas_historical_temp_prec_filled.csv')
+dmi_fill.to_csv('model_input/forcing/csvs/dmi_tas_historical_temp_prec_filled.csv')
 
 
 #+END_SRC
@@ -428,7 +429,7 @@ import numpy as np
 import cftime
 from datetime import datetime
 
-df_filled = pd.read_csv('pism_files/forcing/csvs/dmi_tas_historical_temp_prec_filled.csv', parse_dates = True, index_col = 0)
+df_filled = pd.read_csv('model_input/forcing/csvs/dmi_tas_historical_temp_prec_filled.csv', parse_dates = True, index_col = 0)
 
 
 # Convert the time index to cftime dates with a 365-day calendar
@@ -441,7 +442,7 @@ for value in df_filled.index:
 
     
 # Create the NetCDF file and add dimensions
-filename = "pism_files/forcing/pism_one_station_dmi_tas_noleap.nc"
+filename = "model_input/forcing/pism_one_station_dmi_tas_noleap.nc"
 rootgrp = Dataset(filename, "w", format="NETCDF4")
 
 # Create the time dimension
@@ -492,10 +493,10 @@ rootgrp.close()
 #+RESULTS:
 : None
 
-
+Adding the time bounds required by PISM
 #+BEGIN_SRC sh
 ncap2 -O -s 'defdim("nv",2);time_bnds=make_bounds(time,$nv,"time_bnds");' \
-      pism_files/forcing/pism_one_station_dmi_tas_noleap.nc pism_files/forcing/pism_one_station_dmi_tas_noleap-with-bounds.nc
+      model_input/forcing/pism_one_station_dmi_tas_noleap.nc model_input/forcing/pism_one_station_dmi_tas_noleap-with-bounds.nc
 
 #+END_SRC
 
@@ -512,7 +513,7 @@ import numpy as np
 import cftime
 from datetime import datetime
 
-df_filled = pd.read_csv('pism_files/forcing/csvs/dmi_tas_historical_temp_prec_filled.csv', parse_dates = True, index_col = 0)
+df_filled = pd.read_csv('model_input/forcing/csvs/dmi_tas_historical_temp_prec_filled.csv', parse_dates = True, index_col = 0)
 
 
 # Convert the time index to cftime dates with a 365-day calendar
@@ -525,7 +526,7 @@ for value in df_filled.index:
 
     
 # Create the NetCDF file and add dimensions
-filename = "pism_files/forcing/pism_one_station_dmi_tas_noleap_plus20pc.nc"
+filename = "model_input/forcing/pism_one_station_dmi_tas_noleap_plus20pc.nc"
 rootgrp = Dataset(filename, "w", format="NETCDF4")
 
 # Create the time dimension
@@ -576,10 +577,10 @@ rootgrp.close()
 #+RESULTS:
 : None
 
-
+Adding the time bounds required by PISM
 #+BEGIN_SRC sh
 ncap2 -O -s 'defdim("nv",2);time_bnds=make_bounds(time,$nv,"time_bnds");' \
-      pism_files/forcing/pism_one_station_dmi_tas_noleap_plus20pc.nc pism_files/forcing/pism_one_station_dmi_tas_noleap_plus20pc-with-bounds.nc
+      model_input/forcing/pism_one_station_dmi_tas_noleap_plus20pc.nc model_input/forcing/pism_one_station_dmi_tas_noleap_plus20pc-with-bounds.nc
 
 #+END_SRC
 
@@ -596,7 +597,7 @@ import numpy as np
 import cftime
 from datetime import datetime
 
-df_filled = pd.read_csv('pism_files/forcing/csvs/dmi_tas_historical_temp_prec_filled.csv', parse_dates = True, index_col = 0)
+df_filled = pd.read_csv('model_input/forcing/csvs/dmi_tas_historical_temp_prec_filled.csv', parse_dates = True, index_col = 0)
 
 
 # Convert the time index to cftime dates with a 365-day calendar
@@ -609,7 +610,7 @@ for value in df_filled.index:
 
     
 # Create the NetCDF file and add dimensions
-filename = "pism_files/forcing/pism_one_station_dmi_tas_noleap_plus40pct.nc"
+filename = "model_input/forcing/pism_one_station_dmi_tas_noleap_plus40pct.nc"
 rootgrp = Dataset(filename, "w", format="NETCDF4")
 
 # Create the time dimension
@@ -660,10 +661,10 @@ rootgrp.close()
 #+RESULTS:
 : None
 
-
+Adding the time bounds required by PISM
 #+BEGIN_SRC sh
 ncap2 -O -s 'defdim("nv",2);time_bnds=make_bounds(time,$nv,"time_bnds");' \
-      pism_files/forcing/pism_one_station_dmi_tas_noleap_plus40pct.nc pism_files/forcing/pism_one_station_dmi_tas_noleap_plus40pct-with-bounds.nc
+      model_input/forcing/pism_one_station_dmi_tas_noleap_plus40pct.nc model_input/forcing/pism_one_station_dmi_tas_noleap_plus40pct-with-bounds.nc
 
 #+END_SRC
 
@@ -681,7 +682,7 @@ import numpy as np
 import cftime
 from datetime import datetime
 
-df_filled = pd.read_csv('pism_files/forcing/csvs/dmi_tas_historical_temp_prec_filled.csv', parse_dates = True, index_col = 0)
+df_filled = pd.read_csv('model_input/forcing/csvs/dmi_tas_historical_temp_prec_filled.csv', parse_dates = True, index_col = 0)
 
 
 # Convert the time index to cftime dates with a 365-day calendar
@@ -694,7 +695,7 @@ for value in df_filled.index:
 
     
 # Create the NetCDF file and add dimensions
-filename = "pism_files/forcing/pism_one_station_dmi_tas_noleap_minus20pct.nc"
+filename = "model_input/forcing/pism_one_station_dmi_tas_noleap_minus20pct.nc"
 rootgrp = Dataset(filename, "w", format="NETCDF4")
 
 # Create the time dimension
@@ -745,10 +746,10 @@ rootgrp.close()
 #+RESULTS:
 : None
 
-
+Adding the time bounds required by PISM
 #+BEGIN_SRC sh
 ncap2 -O -s 'defdim("nv",2);time_bnds=make_bounds(time,$nv,"time_bnds");' \
-      pism_files/forcing/pism_one_station_dmi_tas_noleap_minus20pct.nc pism_files/forcing/pism_one_station_dmi_tas_noleap_minus20pct-with-bounds.nc
+      model_input/forcing/pism_one_station_dmi_tas_noleap_minus20pct.nc model_input/forcing/pism_one_station_dmi_tas_noleap_minus20pct-with-bounds.nc
 
 #+END_SRC
 
@@ -775,7 +776,7 @@ tas_l_std = tas_l['t_u'].resample('M').std()
 tas_l_std_month = tas_l_std.groupby(tas_l_std.index.month).mean()
 
 std_mean = (tas_l_std_month+tas_a_std_month)/2
-std_mean.to_csv('pism_files/forcing/csvs/air_temp_sd_PROMICE_mean.csv', index = True)
+std_mean.to_csv('model_input/forcing/csvs/air_temp_sd_PROMICE_mean.csv', index = True)
 
 fig, ax = plt.subplots(1,1,figsize=(5,5))
 tas_a_std_month.plot(ax = ax, label = 'tas_a')
@@ -836,7 +837,7 @@ import pandas as pd
 from pandas.tseries.offsets import DateOffset
 import matplotlib.pyplot as plt
 
-dmi = pd.read_csv('pism_files/forcing/csvs/dmi_tas_historical_temp_prec_filled.csv', parse_dates = True, index_col = 0)
+dmi = pd.read_csv('model_input/forcing/csvs/dmi_tas_historical_temp_prec_filled.csv', parse_dates = True, index_col = 0)
 #print(dmi)
 
 #print(len(dmi.resample('Y')))
@@ -888,7 +889,7 @@ ax[1].text(0.02, 0.92, "(b)", transform=ax[1].transAxes,
 
 fig.savefig('figures/paper/one_weather_station_forcing.png', dpi = 300)
 plt.show()
-dmi_cold.to_csv('pism_files/forcing/csvs/cold_climate_1776_1896.csv')
+dmi_cold.to_csv('model_input/forcing/csvs/cold_climate_1776_1896.csv')
 #+end_src
 
 #+RESULTS:
@@ -902,7 +903,7 @@ from netCDF4 import Dataset
 import numpy as np
 from datetime import datetime
 
-df_filled = pd.read_csv('pism_files/forcing/csvs/cold_climate_1776_1896.csv', parse_dates = True, index_col = 0)
+df_filled = pd.read_csv('model_input/forcing/csvs/cold_climate_1776_1896.csv', parse_dates = True, index_col = 0)
 
 #there is something funky with the no leap calendar so I need to add 2 years
 df_filled.index = df_filled.index + DateOffset(years=2)
@@ -917,7 +918,7 @@ for value in df_filled.index:
 
     
 # Create the NetCDF file and add dimensions
-filename = "pism_files/forcing/pism_one_station_tas_cold_noleap.nc"
+filename = "model_input/forcing/pism_one_station_tas_cold_noleap.nc"
 rootgrp = Dataset(filename, "w", format="NETCDF4")
 
 # Create the time dimension
@@ -969,7 +970,7 @@ pism_one_station_tas_cold.nc
 
 #+BEGIN_SRC sh
 ncap2 -O -s 'defdim("nv",2);time_bnds=make_bounds(time,$nv,"time_bnds");' \
-      pism_files/forcing/pism_one_station_tas_cold_noleap.nc pism_files/forcing/pism_one_station_tas_cold_noleap-with-bounds.nc
+      model_input/forcing/pism_one_station_tas_cold_noleap.nc model_input/forcing/pism_one_station_tas_cold_noleap-with-bounds.nc
 
 #+END_SRC
 
@@ -984,7 +985,7 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 
-dmi = pd.read_csv('pism_files/forcing/csvs/dmi_tas_historical_temp_prec_filled.csv', parse_dates = True, index_col = 0)
+dmi = pd.read_csv('model_input/forcing/csvs/dmi_tas_historical_temp_prec_filled.csv', parse_dates = True, index_col = 0)
 
 tas_a = pd.read_csv('data/promice/TAS_A_hour.csv', index_col = 0, parse_dates = True)
 tas_l = pd.read_csv('data/promice/TAS_L_hour.csv', index_col = 0, parse_dates = True)
@@ -1027,8 +1028,8 @@ import xarray as xr
 import matplotlib.pyplot as plt
 
 # Load the NetCDF file
-file_path = 'pism_files/forcing/pism_one_station_dmi_tas_noleap-with-bounds.nc'
-df_filled = pd.read_csv('pism_files/forcing/csvs/dmi_tas_historical_temp_prec_filled.csv', parse_dates
+file_path = 'model_input/forcing/pism_one_station_dmi_tas_noleap-with-bounds.nc'
+df_filled = pd.read_csv('model_input/forcing/csvs/dmi_tas_historical_temp_prec_filled.csv', parse_dates
                         = True, index_col = 0)
 df_filled['prec (mm/month)'].plot()
 with xr.open_dataset(file_path) as ds:
@@ -1393,7 +1394,7 @@ export EXSTEP=10
 
  #+BEGIN_SRC sh :eval yes
 WHOLE=model_output/g5km_gridseq_maxdiff_3ka.nc
-BCFILE=pism_files/g5km_bc.nc
+BCFILE=model_input/g5km_bc.nc
 echo "creating PISM-readable boundary conditions file $BCFILE from whole ice sheet result ..."
 ncks -O -v u_ssa,v_ssa,basal_melt_rate_grounded,tillwat,enthalpy,litho_temp $WHOLE $BCFILE
 # rename bmelt and u_ssa and v_ssa so that they are used as b.c.
@@ -2851,7 +2852,7 @@ with xr.open_dataset('data/promice/Avg_Timeseries_rotr_159_251.nc') as DS:
     
 
 
-with xr.open_dataset('pism_files/pism_greenland_1km_v3-filled.nc') as DS:
+with xr.open_dataset('model_input/pism_greenland_1km_v3-filled.nc') as DS:
     npts = len(gdf)
     thk = np.zeros((npts))
     bed = np.zeros((npts))
