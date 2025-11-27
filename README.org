@@ -12,6 +12,8 @@
 * About
 This is the code for all the work that went into the Manuscript: "Century-scale hindcasting of glacier flux using ice-rafted debris: A step toward improved model initialisation" by Signe Hillerup Larsen, Nanna Karlsson, Anne Solgaard, Synne Svendsen and Camilla Andresen
 
+Please note that this is published as is and it is not plug-and-play reproducible. Please contact shl@geus.dk for any questions.
+
 * Python environment
 
 #+begin_src bash
