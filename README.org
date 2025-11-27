@@ -1,0 +1,4541 @@
+#+Title: Code for: Century-scale hindcasting of glacier flux using ice-rafted debris: A step toward improved model initialisation
+#+Author: Signe Hillerup Larsen
+# #+OPTIONS:   H:4 num:4 toc:nil \n:nil ::t |:t ^:{} -:t f:t *:t <:t
+
+# #+PROPERTY: header-args: :tangle no :noweb yes :eval no
+# #+PROPERTY: header-args:jupyter-python :kernel dynahide_v3 :session dynahide_v3 :eval no :noweb yes :comments both :tangle no :tangle-mode (identity #o544)
+
+#+PROPERTY: header-args:python :eval yes :noweb yes :session dynahide_v4_python
+#+PROPERTY: header-args:bash :session dynahide_v4 :noweb yes
+
+
+* About
+This is the code for all the work that went into the Manuscript: "Century-scale hindcasting of glacier flux using ice-rafted debris: A step toward improved model initialisation" by Signe Hillerup Larsen, Nanna Karlsson, Anne Solgaard, Synne Svendsen and Camilla Andresen
+
+* Python environment
+
+#+begin_src bash
+conda create -n dynahide -c conda-forge geopandas fiona pandas xarray cftime rasterio scipy pydap zarr iris dask openpyxl
+#+end_src
+
+
+* PISM and focinh
+** Make pism model nc files 
+*** Make bootstrappable nc file for entire Greenland
+
+**** TODO update and test: Make bootstrappable nc file for Greenland (1km)
+
+Tangle if there is changes in fill_climate_values.py
+#+BEGIN_SRC sh :results verbatim
+conda activate py38
+#+END_SRC
+
+#+BEGIN_SRC bash :results verbatim :tangle scripts/make_PISM_netcdf.sh
+#!/bin/bash
+
+# Created by Signe Hillerup Larsen in 2022
+# This script generates a PISM readable netcdf file.
+# It requires Bedmachine data and netcdf files from pism-stable/examples (if files are not there, run preprocess.sh in the example files => Manual tweeking is likely necessary.
+# At present it loads in a mask for Helheim - this is probably not necessary for a lot of applications
+
+# Setting the working file (the file to be created)
+PROJ_LIB=/usr/share/proj
+WORKING=pism_files/pism_greenland_1km_v3.nc
+
+
+# Removing earlier versions of this file in order to start from scratch
+rm $WORKING
+
+
+# Setting the directory where to find the bedmachine folder
+DATADIR=data
+
+
+# Setting the dorectory where to find pism examples
+PISM_EXAMPLEDIR=/home/shl@geus.dk/programs/pism-stable/examples
+
+# Defining the grid resolution at the higest resolution expected to run 
+<<greenland_resolution>>
+
+# Interpolating Bedmaching data onto the grid defined above
+<<greenland_geometry>>
+
+
+# Interpolating the ground heatflux from a PISM example 
+<<greenland_heatflux>>
+
+
+# Interpolating climate from SeaRise (PISM example)
+<<greenland_climate>>
+
+
+# Add the Helheim mask
+<<add_ftt_mask>>
+
+
+# Clean up unwanted variables
+<<greenland_declutter>>
+
+
+# Make the file readable for PISM (calculates lat and long and I think this requires PROJ)
+nc2cdo.py $WORKING
+
+
+# Filling out climate values at edges because PISM v2.0.4 does not like no data in climate files
+chmod 755 fill_climate_values.py
+python fill_climate_values.py pism_greenland_1km_v3
+
+#rm *tmp*
+ #+END_SRC
+
+ #+RESULTS:
+
+
+***** Code
+#+NAME: greenland_resolution
+#+BEGIN_SRC bash
+xres=1000
+yres=1000
+xmin=-593725
+ymin=-3331123
+xmax=855521
+ymax=-815550
+#+END_SRC
+
+#+RESULTS: greenland_resolution
+
+#+NAME: greenland_geometry
+#+BEGIN_SRC bash :results verbatim
+DATA=$DATADIR/Morlighem_2022/BedMachineGreenland-v5.nc
+variab=thickness
+shortname=thk
+gdalwarp -of netCDF -r near -t_srs "+proj=stere +lat_0=90 +lat_ts=70 +lon_0=-45 +k=1 +x_0=0 +y_0=0 +datum=WGS84 +units=m +no_defs" -te $xmin $ymin $xmax $ymax -tr $xres $yres NETCDF:${DATA}:$variab tmp.nc -overwrite
+ncks -O -v Band1 tmp.nc $WORKING
+ncap2 -s 'thk=float(Band1)' $WORKING $WORKING -O
+ncap2 -s 'where(thk<0) thk=0' $WORKING $WORKING -O
+ncatted -a standard_name,$shortname,d,, $WORKING # remove it
+ncatted -O -a units,$shortname,o,c,"m" $WORKING
+ncatted -O -a long_name,$shortname,o,c,"Ice sheet thickness" $WORKING
+rm tmp.nc
+
+variab=bed
+shortname=topg
+gdalwarp -of netCDF -t_srs "+proj=stere +lat_0=90 +lat_ts=70 +lon_0=-45 +k=1 +x_0=0 +y_0=0 +datum=WGS84 +units=m +no_defs" -r near -te $xmin $ymin $xmax $ymax -tr $xres $yres NETCDF:${DATA}:$variab tmp.nc -overwrite
+ncks -A -v Band1 tmp.nc $WORKING
+ncap2 -s 'topg=float(Band1)' $WORKING $WORKING -O
+ncatted -a standard_name,$shortname,d,, $WORKING # remove it
+ncatted -O -a units,$shortname,o,c,"m" $WORKING
+ncatted -O -a long_name,$shortname,o,c,"Bedrock topography" $WORKING
+rm tmp.nc
+
+variab=surface
+shortname=usurf
+gdalwarp -of netCDF -t_srs "+proj=stere +lat_0=90 +lat_ts=70 +lon_0=-45 +k=1 +x_0=0 +y_0=0 +datum=WGS84 +units=m +no_defs" -r near -te $xmin $ymin $xmax $ymax -tr $xres $yres NETCDF:${DATA}:$variab tmp.nc -overwrite
+ncks -A -v Band1 tmp.nc $WORKING
+ncap2 -s 'usurf=float(Band1)' $WORKING $WORKING -O
+ncatted -a standard_name,$shortname,d,, $WORKING # remove it
+ncatted -O -a units,$shortname,o,c,"m" $WORKING
+ncatted -O -a long_name,$shortname,o,c,"Ice surface elevation" $WORKING
+rm tmp.nc
+
+
+ #+END_SRC
+
+
+#+NAME: greenland_heatflux
+#+BEGIN_SRC bash
+DATA=$PISM_EXAMPLEDIR/jako/gr1km.nc #geothermal_heat_greenland.nc #
+variab=bheatflx #Band1 #
+shortname=bheatflx
+gdalwarp -of netCDF -t_srs "+proj=stere +lat_0=90 +lat_ts=70 +lon_0=-45 +k=1 +x_0=0 +y_0=0 +datum=WGS84 +units=m +no_defs" -r bilinear -srcnodata none -te $xmin $ymin $xmax $ymax -tr $xres $yres NETCDF:${DATA}:$variab tmp.nc -overwrite
+ncap2 -s 'Band1=double(Band1);' $WORKING $WORKING -O
+ncks -A -v Band1 tmp.nc $WORKING 
+ncap2 -s 'bheatflx=float(Band1)' $WORKING $WORKING -O
+#ncrename -v Band1,$shortname $WORKING
+ncatted -a standard_name,$shortname,d,, $WORKING # remove it
+ncatted -O -a units,$shortname,o,c,"mW/m²" $WORKING
+ncatted -O -a long_name,$shortname,o,c,"Basal Heat Flux" $WORKING
+rm tmp.nc
+ #+END_SRC
+
+#+NAME: greenland_climate
+#+BEGIN_SRC bash
+DATA=$PISM_EXAMPLEDIR/std-greenland/Greenland_5km_v1.1.nc
+
+variab=presprcp
+shortname=precipitation
+gdalwarp -of netCDF -t_srs "+proj=stere +lat_0=90 +lat_ts=70 +lon_0=-45 +k=1 +x_0=0 +y_0=0 +datum=WGS84 +units=m +no_defs" -r bilinear -dstnodata none -te $xmin $ymin $xmax $ymax -tr $xres $yres NETCDF:${DATA}:$variab tmp.nc -overwrite
+ncks -A -v Band1 tmp.nc $WORKING
+ncap2 -O -s "precipitation=Band1*1000.0" $WORKING $WORKING
+ncatted -a standard_name,$shortname,d,, $WORKING # remove it
+ncatted -O -a units,$shortname,o,c,"kg m-2 year-1" $WORKING
+ncatted -O -a long_name,$shortname,c,c,"mean annual precipitation rate" $WORKING
+rm tmp.nc
+
+variab=airtemp2m
+shortname=ice_surface_temp
+gdalwarp -of netCDF -t_srs "+proj=stere +lat_0=90 +lat_ts=70 +lon_0=-45 +k=1 +x_0=0 +y_0=0 +datum=WGS84 +units=m +no_defs" -r bilinear -te $xmin $ymin $xmax $ymax -tr $xres $yres NETCDF:${DATA}:$variab tmp.nc -overwrite
+ncks -A -v Band1 tmp.nc $WORKING
+ncrename -O -v Band1,$shortname $WORKING
+ncatted -O -a units,$shortname,o,c,"Celsius" $WORKING
+ncatted -O -a long_name,$shortname,c,c,"2 m air temp used as surface temp" $WORKING
+rm tmp.nc
+
+variab=smb
+shortname=climatic_mass_balance
+gdalwarp -of netCDF -t_srs "+proj=stere +lat_0=90 +lat_ts=70 +lon_0=-45 +k=1 +x_0=0 +y_0=0 +datum=WGS84 +units=m +no_defs" -r bilinear -te $xmin $ymin $xmax $ymax -tr $xres $yres NETCDF:${DATA}:$variab tmp.nc -overwrite
+ncks -A -v Band1 tmp.nc $WORKING
+ncap2 -O -s "climatic_mass_balance=1000.0*Band1" $WORKING $WORKING
+ncap2 -O -s "where(thk <= 0.0){climatic_mass_balance=-1000.0;}" $WORKING $WORKING
+ncatted -O -a standard_name,$shortname,m,c,"land_ice_surface_specific_mass_balance_flux" $WORKING
+ncatted -O -a units,$shortname,m,c,"kg m-2 year-1" $WORKING
+rm tmp.nc
+#+END_SRC
+-a_srs "+proj=stere +lat_0=90 +lat_ts=70 +lon_0=-45 +k=1 +x_0=0 +y_0=0 +datum=WGS84 +units=m +no_defs"
+-of netCDF
+
+
+#+BEGIN_SRC python
+import geopandas as gpd
+
+# Load the shapefile
+gdf = gpd.read_file('shp/catchment_jan2021.shp')
+
+# Set the CRS (Coordinate Reference System)
+gdf.crs = "+proj=stere +lat_0=90 +lat_ts=70 +lon_0=-45 +k=1 +x_0=0 +y_0=0 +datum=WGS84 +units=m +no_defs"  # Replace with your desired CRS
+
+# Write out the modified shapefile
+gdf.to_file('shp/catchment_jan2021_3413.shp')
+
+#+END_SRC
+
+#+RESULTS:
+-a_srs "+proj=stere +lat_0=90 +lat_ts=70 +lon_0=-45 +k=1 +x_0=0 +y_0=0 +datum=WGS84 +units=m +no_defs"
+
+#+NAME: rasterize_ftt_mask_to_helheim_nc
+ #+BEGIN_SRC bash :results verbatim
+# This only works in python 2.7 due to the old netcdf3_classic format of the pism file
+gdal_rasterize -burn 0 -te $xmin $ymin $xmax $ymax -tr $xres $yres -of netCDF -init 1 shp/catchment_jan2021.shp helhmask_refined_v3.nc
+ncap2 -s 'Band1=int(Band1)' helhmask_refined_v3.nc helhmask_refined_v3.nc -O
+ #+END_SRC
+
+#+NAME: add_ftt_mask
+#+BEGIN_SRC bash
+DATA=helhmask_refined_v3.nc
+
+gdalwarp -of netCDF -t_srs "+proj=stere +lat_0=90 +lat_ts=70 +lon_0=-45 +k=1 +x_0=0 +y_0=0 +datum=WGS84 +units=m +no_defs" -r bilinear -te $xmin $ymin $xmax $ymax -tr $xres $yres NETCDF:${DATA}:Band1 tmp.nc -overwrite
+ncks -A -v Band1 tmp.nc $WORKING 
+ncap2 -O -s 'ftt_mask=int(Band1)' $WORKING $WORKING 
+#ncap2 -s 'where(thk<0) thk=0' $WORKING $WORKING -O
+#ncatted -a standard_name,$shortname,d,, $WORKING # remove it
+#ncatted -O -a units,$shortname,o,c,"m" $WORKING
+ncatted -O -a long_name,$ftt_mask,o,c,"Drainage basin area for regional modeling" $WORKING
+rm tmp.nc
+#+END_SRC
+
+
+
+#+NAME: greenland_declutter
+#+BEGIN_SRC bash
+# de-clutter by only keeping vars we want
+
+ncks -O -v bheatflx,topg,thk,precipitation,ice_surface_temp,climatic_mass_balance,ftt_mask,usurf $WORKING $WORKING
+ncatted -O -a projection,global,c,c,"+proj=stere +lat_0=90 +lat_ts=70 +lon_0=-45 +k=1 +x_0=0 +y_0=0 +datum=WGS84 +units=m +no_defs " $WORKING
+
+ #+END_SRC
+
+
+#+BEGIN_SRC python :tangle fill_climate_values.py
+import xarray as xr
+import sys
+
+infile =  sys.argv[1]
+
+src = xr.open_dataset(infile+'.nc')
+ds = src.copy()
+ds['ice_surface_temp'] = src['ice_surface_temp'].fillna(-10)
+ds['precipitation'] = src['precipitation'].fillna(0)
+
+ds.to_netcdf(infile+'-filled.nc', format='NETCDF3_CLASSIC')
+ds.close()
+#+END_SRC
+
+#+BEGIN_SRC python
+import xarray as xr
+
+infile =  'pism_greenland_1km_v2'
+
+src = xr.open_dataset(infile+'.nc')
+ds = src.copy()
+ds['ice_surface_temp'] = src['ice_surface_temp'].fillna(-10)
+ds['precipitation'] = src['precipitation'].fillna(0)
+
+ds.to_netcdf(infile+'-filled.nc', format='NETCDF3_CLASSIC')
+ds.close()
+#+END_SRC
+
+#+RESULTS:
+:results:
+# Out [9]: 
+:end:
+
+#+BEGIN_SRC bash
+chmod 755 fill_climate_values.py
+python fill_climate_values.py $WORKINGFILE 
+#+END_SRC
+
+
+
+
+
+**** Take a look at the pism model file using xarray
+
+ #+BEGIN_SRC python :results output
+import xarray as xr
+import numpy as np
+
+with xr.open_dataset('pism_greenland_1km_v2-filled.nc') as src:
+    variable='thk'
+    #variable='climatic_mass_balance'
+    variable='ice_surface_temp'
+    #variable='precipitation'
+    src[variable].plot()
+
+    print(src[variable].min())
+    print(src[variable].max())
+    #src.topg.plot()
+ #+END_SRC
+
+ #+RESULTS:
+ :results:
+ # Out [8]: 
+ # output
+ ---------------------------------------------------------------------------
+ KeyError                                  Traceback (most recent call last)
+ ~/miniconda3/envs/py38/lib/python3.8/site-packages/xarray/backends/file_manager.py in _acquire_with_cache_info(self, needs_lock)
+     197             try:
+ --> 198                 file = self._cache[self._key]
+     199             except KeyError:
+
+ ~/miniconda3/envs/py38/lib/python3.8/site-packages/xarray/backends/lru_cache.py in __getitem__(self, key)
+      52         with self._lock:
+ ---> 53             value = self._cache[key]
+      54             self._cache.move_to_end(key)
+
+ KeyError: [<class 'netCDF4._netCDF4.Dataset'>, ('/home/shl/OneDrive/projects/dynahide_v2/pism_greenland_1km_v2-filled.nc',), 'r', (('clobber', True), ('diskless', False), ('format', 'NETCDF4'), ('persist', False))]
+
+ During handling of the above exception, another exception occurred:
+
+ OSError                                   Traceback (most recent call last)
+ /tmp/ipykernel_10139/1535156387.py in <module>
+       2 import numpy as np
+       3 
+ ----> 4 with xr.open_dataset('pism_greenland_1km_v2-filled.nc') as src:
+       5     variable='thk'
+       6     #variable='climatic_mass_balance'
+
+ ~/miniconda3/envs/py38/lib/python3.8/site-packages/xarray/backends/api.py in open_dataset(filename_or_obj, group, decode_cf, mask_and_scale, decode_times, autoclose, concat_characters, decode_coords, engine, chunks, lock, cache, drop_variables, backend_kwargs, use_cftime, decode_timedelta)
+     506             engine = _get_default_engine(filename_or_obj, allow_remote=True)
+     507         if engine == "netcdf4":
+ --> 508             store = backends.NetCDF4DataStore.open(
+     509                 filename_or_obj, group=group, lock=lock, **backend_kwargs
+     510             )
+
+ ~/miniconda3/envs/py38/lib/python3.8/site-packages/xarray/backends/netCDF4_.py in open(cls, filename, mode, format, group, clobber, diskless, persist, lock, lock_maker, autoclose)
+     356             netCDF4.Dataset, filename, mode=mode, kwargs=kwargs
+     357         )
+ --> 358         return cls(manager, group=group, mode=mode, lock=lock, autoclose=autoclose)
+     359 
+     360     def _acquire(self, needs_lock=True):
+
+ ~/miniconda3/envs/py38/lib/python3.8/site-packages/xarray/backends/netCDF4_.py in __init__(self, manager, group, mode, lock, autoclose)
+     312         self._group = group
+     313         self._mode = mode
+ --> 314         self.format = self.ds.data_model
+     315         self._filename = self.ds.filepath()
+     316         self.is_remote = is_remote_uri(self._filename)
+
+ ~/miniconda3/envs/py38/lib/python3.8/site-packages/xarray/backends/netCDF4_.py in ds(self)
+     365     @property
+     366     def ds(self):
+ --> 367         return self._acquire()
+     368 
+     369     def open_store_variable(self, name, var):
+
+ ~/miniconda3/envs/py38/lib/python3.8/site-packages/xarray/backends/netCDF4_.py in _acquire(self, needs_lock)
+     359 
+     360     def _acquire(self, needs_lock=True):
+ --> 361         with self._manager.acquire_context(needs_lock) as root:
+     362             ds = _nc4_require_group(root, self._group, self._mode)
+     363         return ds
+
+ ~/miniconda3/envs/py38/lib/python3.8/contextlib.py in __enter__(self)
+     111         del self.args, self.kwds, self.func
+     112         try:
+ --> 113             return next(self.gen)
+     114         except StopIteration:
+     115             raise RuntimeError("generator didn't yield") from None
+
+ ~/miniconda3/envs/py38/lib/python3.8/site-packages/xarray/backends/file_manager.py in acquire_context(self, needs_lock)
+     184     def acquire_context(self, needs_lock=True):
+     185         """Context manager for acquiring a file."""
+ --> 186         file, cached = self._acquire_with_cache_info(needs_lock)
+     187         try:
+     188             yield file
+
+ ~/miniconda3/envs/py38/lib/python3.8/site-packages/xarray/backends/file_manager.py in _acquire_with_cache_info(self, needs_lock)
+     202                     kwargs = kwargs.copy()
+     203                     kwargs["mode"] = self._mode
+ --> 204                 file = self._opener(*self._args, **kwargs)
+     205                 if self._mode == "w":
+     206                     # ensure file doesn't get overriden when opened again
+
+ netCDF4/_netCDF4.pyx in netCDF4._netCDF4.Dataset.__init__()
+
+ netCDF4/_netCDF4.pyx in netCDF4._netCDF4._ensure_nc_success()
+
+ OSError: [Errno -51] NetCDF: Unknown file format: b'/home/shl/OneDrive/projects/dynahide_v2/pism_greenland_1km_v2-filled.nc'
+ :end:
+
+
+
+
+
+
+** Forcing
+*** DMI
+DMI historical data is available here: https://www.dmi.dk/publikationer/
+DMIRep20-04
+Accompanying the report: Greenland - DMI Historical Climate Data Collection 1784-2019
+
+The annual data behind the graphics are described in chapter 5 and can be downloaded together
+with the monthly/annual data (see appendix 4). The graphs are shown on the next pages. They
+show annual average air temperatures and accumulated precipitation for ten (10) air temperature
+data sets and seven (7) precipitation data sets. The values are shown relative to average 1981-
+2010 (also shown in graphs and tables).
+
+Annual average air temperature since 1784 for a merged SW Greenland series (see section
+6.2.1 and Appendix 4); anomaly relative to 1981-2010. There are missing values for some early years 1784,
+1787-1789, 1792-1796, 1799, 1802-1807, 1814-1815, 1821-1839 and 1851.
+**** Extract Tasiilaq values
+
+#+begin_src python
+from netCDF4 import Dataset
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+
+# Hitorical data
+monthly_mean = pd.read_csv("data/dmi/gr_monthly_all_1784_2019.csv", sep =";",decimal = ',')
+
+# Tasiilaq air temperature
+station_no=4360
+data_type=101 # 101 temperature
+
+<<unfold_dmi_historical_data>>
+
+temp = pd.DataFrame(result)
+temp.rename(columns = {0:'temp'}, inplace = True)
+
+
+# Tasiilaq precipitation
+station_no=4360
+data_type=601 # 601 accumulated precipitation (mm)
+<<unfold_dmi_historical_data>>
+prec = pd.DataFrame(result)
+prec.rename(columns = {0:'prec'}, inplace = True)
+
+
+
+
+# Most recent data
+recent_data = pd.read_csv("data/dmi/436000.csv", sep =";",decimal = ',')
+recent_data['datetime'] = pd.to_datetime(recent_data[['Year', 'Month', 'Day']].assign(Hour=recent_data['Hour(utc)']))
+recent_data.index = recent_data['datetime']
+
+temp_recent = recent_data['101'].astype(float).resample('MS').mean()
+prec_recent = recent_data['601'].astype(float).resample('MS').sum()
+
+merged_prec = prec['prec'].combine_first(prec_recent)
+merged_temp = temp['temp'].combine_first(temp_recent)
+
+
+df = pd.DataFrame(merged_temp.copy())
+df.columns = ['temp (C)']
+df['prec (mm/month)'] = merged_prec
+df.index.name = 'time'
+print(df)
+df.plot()
+df_filled = df.copy()
+df_filled['temp (C)'] = df['temp (C)'].interpolate(method = 'linear')
+df_filled['prec (mm/month)'] = df['prec (mm/month)'].ffill()
+df_filled['prec (mm/month)'] = df_filled['prec (mm/month)'].bfill()
+print(df_filled)
+df.to_csv('pism_files/forcing/csvs/dmi_tas_historical_temp_prec.csv')
+df_filled.to_csv('pism_files/forcing/csvs/dmi_tas_historical_temp_prec_ffill.csv')
+#+end_src
+
+#+RESULTS:
+: None
+
+
+#+NAME: unfold_dmi_historical_data
+#+BEGIN_SRC python
+sel = (monthly_mean['stat_no'] == station_no) & (monthly_mean['elem_no']==data_type)
+annual = monthly_mean[sel].copy()
+annual.index = annual.year
+annual = annual.drop(columns=['stat_no','elem_no','year', 'annual','co_code'])
+appended = []
+for index,year in enumerate(annual.index):
+    #print(annual.iloc[index,:])
+    monthly = annual.iloc[index,:]
+    monthly.index = pd.to_datetime(str(year)+'-'+monthly.index, format = '%Y-%b')
+    appended.append(monthly)
+result = pd.concat(appended)
+
+#+END_SRC
+
+
+**** Filling datagaps the manual way
+
+#+BEGIN_SRC python
+import pandas as pd
+import matplotlib.pyplot as plt
+dmi = pd.read_csv('pism_files/forcing/csvs/dmi_tas_historical_temp_prec.csv', parse_dates = True, index_col = 0)
+#print(dmi)
+
+
+dmi_fill = dmi.copy()
+dmi_fill.loc['Sep-1910':'Aug-1911', 'temp (C)'] = dmi.loc['Sep-1909':'Aug-1910', 'temp (C)'].values
+
+dmi_fill.loc['Sep-1910':'Aug-1911', 'prec (mm/month)'] = dmi.loc['Sep-1909':'Aug-1910', 'prec (mm/month)'].values
+
+dmi_fill.loc['1896':'1897', 'prec (mm/month)'] = dmi.loc['1898':'1899', 'prec (mm/month)'].values
+
+dmi_fill.loc['1895', 'prec (mm/month)'] = dmi_fill.loc['1896', 'prec (mm/month)'].values
+
+
+#dmi_fill.ffill().plot()
+
+#dmi_fill.plot()
+#plt.show()
+dmi_fill = dmi_fill.ffill()
+dmi_fill.to_csv('pism_files/forcing/csvs/dmi_tas_historical_temp_prec_filled.csv')
+
+
+#+END_SRC
+
+#+RESULTS:
+: None
+
+**** Create dmi temperature and precipitation forcing file using the noleap calendar
+
+#+BEGIN_SRC python
+import pandas as pd
+from netCDF4 import Dataset
+import numpy as np
+import cftime
+from datetime import datetime
+
+df_filled = pd.read_csv('pism_files/forcing/csvs/dmi_tas_historical_temp_prec_filled.csv', parse_dates = True, index_col = 0)
+
+
+# Convert the time index to cftime dates with a 365-day calendar
+timesince = []
+for value in df_filled.index:
+    dt = pd.to_datetime(value)
+    # Assume the date represents the start of the month
+    cftime_date = cftime.DatetimeNoLeap(dt.year, dt.month, 1)
+    timesince.append((cftime_date - cftime.DatetimeNoLeap(1, 1, 1)).days)
+
+    
+# Create the NetCDF file and add dimensions
+filename = "pism_files/forcing/pism_one_station_dmi_tas_noleap.nc"
+rootgrp = Dataset(filename, "w", format="NETCDF4")
+
+# Create the time dimension
+time_dim = rootgrp.createDimension('time', len(df_filled.index))
+
+# Create the time variable and write attributes
+times = rootgrp.createVariable("time", "f4", ("time",))
+times.units = "days since 0001-01-01 00:00:00"
+times.axis = "T"
+times.calendar = "365_day"
+times.long_name = "time"
+times[:] = timesince
+
+air_temp = rootgrp.createVariable("air_temp","f4", ("time",))
+air_temp.units = "Kelvin"
+air_temp.reference = "DMI historical data: Greenland - DMI Historical Climate Data Collection 1784-2019, DMIRep_20-04.pdf"
+air_temp.standard_name = "air_temperature"
+air_temp.long_name = "Air temperature"
+
+precipitation = rootgrp.createVariable("precipitation","f4", ("time",))
+precipitation.units = "kg m-2 s-1"
+precipitation.reference = "DMI historical data: Greenland - DMI Historical Climate Data Collection 1784-2019, DMIRep_20-04.pdf"
+precipitation.standard_name = "precipitation"
+precipitation.long_name = "Precipitation"
+
+
+
+
+# Generate the conversion factor from mm/month to kg/(m2*s)
+# Use the fact that 1 mm of water corresponds to 1 kg of water over a square meter (because the density of water is 1 kg/L).
+mm_to_kg_per_m2 = 1 #1000
+# Convert monthly rate to a per-second rate (assuming an average month length of 30.44 days)
+month_to_s = 1 / (30.44 * 24 * 60 * 60)
+# Calculate the conversion factor
+prec_conversion_factor =  mm_to_kg_per_m2 * month_to_s
+
+
+undercatch = 1 #2.5
+# Fill in the data and convert units and correct undercatch
+air_temp[:] = df_filled['temp (C)'].values+273.15
+precipitation[:] = df_filled['prec (mm/month)']*undercatch*prec_conversion_factor
+#times[:] = timesince
+
+rootgrp.close()
+
+#+END_SRC
+
+#+RESULTS:
+: None
+
+
+#+BEGIN_SRC sh
+ncap2 -O -s 'defdim("nv",2);time_bnds=make_bounds(time,$nv,"time_bnds");' \
+      pism_files/forcing/pism_one_station_dmi_tas_noleap.nc pism_files/forcing/pism_one_station_dmi_tas_noleap-with-bounds.nc
+
+#+END_SRC
+
+#+RESULTS:
+
+
+
+**** Create dmi temperature and perturbed +20% precipitation forcing file using the noleap calendar
+
+#+BEGIN_SRC python
+import pandas as pd
+from netCDF4 import Dataset
+import numpy as np
+import cftime
+from datetime import datetime
+
+df_filled = pd.read_csv('pism_files/forcing/csvs/dmi_tas_historical_temp_prec_filled.csv', parse_dates = True, index_col = 0)
+
+
+# Convert the time index to cftime dates with a 365-day calendar
+timesince = []
+for value in df_filled.index:
+    dt = pd.to_datetime(value)
+    # Assume the date represents the start of the month
+    cftime_date = cftime.DatetimeNoLeap(dt.year, dt.month, 1)
+    timesince.append((cftime_date - cftime.DatetimeNoLeap(1, 1, 1)).days)
+
+    
+# Create the NetCDF file and add dimensions
+filename = "pism_files/forcing/pism_one_station_dmi_tas_noleap_plus20pc.nc"
+rootgrp = Dataset(filename, "w", format="NETCDF4")
+
+# Create the time dimension
+time_dim = rootgrp.createDimension('time', len(df_filled.index))
+
+# Create the time variable and write attributes
+times = rootgrp.createVariable("time", "f4", ("time",))
+times.units = "days since 0001-01-01 00:00:00"
+times.axis = "T"
+times.calendar = "365_day"
+times.long_name = "time"
+times[:] = timesince
+
+air_temp = rootgrp.createVariable("air_temp","f4", ("time",))
+air_temp.units = "Kelvin"
+air_temp.reference = "DMI historical data: Greenland - DMI Historical Climate Data Collection 1784-2019, DMIRep_20-04.pdf"
+air_temp.standard_name = "air_temperature"
+air_temp.long_name = "Air temperature"
+
+precipitation = rootgrp.createVariable("precipitation","f4", ("time",))
+precipitation.units = "kg m-2 s-1"
+precipitation.reference = "DMI historical data: Greenland - DMI Historical Climate Data Collection 1784-2019, DMIRep_20-04.pdf"
+precipitation.standard_name = "precipitation"
+precipitation.long_name = "Precipitation"
+
+
+
+
+# Generate the conversion factor from mm/month to kg/(m2*s)
+# Use the fact that 1 mm of water corresponds to 1 kg of water over a square meter (because the density of water is 1 kg/L).
+mm_to_kg_per_m2 = 1 #1000
+# Convert monthly rate to a per-second rate (assuming an average month length of 30.44 days)
+month_to_s = 1 / (30.44 * 24 * 60 * 60)
+# Calculate the conversion factor
+prec_conversion_factor =  mm_to_kg_per_m2 * month_to_s
+
+
+undercatch = 1.2 #2.5
+# Fill in the data and convert units and correct undercatch
+air_temp[:] = df_filled['temp (C)'].values+273.15
+precipitation[:] = df_filled['prec (mm/month)']*undercatch*prec_conversion_factor
+#times[:] = timesince
+
+rootgrp.close()
+
+#+END_SRC
+
+#+RESULTS:
+: None
+
+
+#+BEGIN_SRC sh
+ncap2 -O -s 'defdim("nv",2);time_bnds=make_bounds(time,$nv,"time_bnds");' \
+      pism_files/forcing/pism_one_station_dmi_tas_noleap_plus20pc.nc pism_files/forcing/pism_one_station_dmi_tas_noleap_plus20pc-with-bounds.nc
+
+#+END_SRC
+
+#+RESULTS:
+
+
+
+**** Create dmi temperature and perturbed +40% precipitation forcing file using the noleap calendar
+
+#+BEGIN_SRC python
+import pandas as pd
+from netCDF4 import Dataset
+import numpy as np
+import cftime
+from datetime import datetime
+
+df_filled = pd.read_csv('pism_files/forcing/csvs/dmi_tas_historical_temp_prec_filled.csv', parse_dates = True, index_col = 0)
+
+
+# Convert the time index to cftime dates with a 365-day calendar
+timesince = []
+for value in df_filled.index:
+    dt = pd.to_datetime(value)
+    # Assume the date represents the start of the month
+    cftime_date = cftime.DatetimeNoLeap(dt.year, dt.month, 1)
+    timesince.append((cftime_date - cftime.DatetimeNoLeap(1, 1, 1)).days)
+
+    
+# Create the NetCDF file and add dimensions
+filename = "pism_files/forcing/pism_one_station_dmi_tas_noleap_plus40pct.nc"
+rootgrp = Dataset(filename, "w", format="NETCDF4")
+
+# Create the time dimension
+time_dim = rootgrp.createDimension('time', len(df_filled.index))
+
+# Create the time variable and write attributes
+times = rootgrp.createVariable("time", "f4", ("time",))
+times.units = "days since 0001-01-01 00:00:00"
+times.axis = "T"
+times.calendar = "365_day"
+times.long_name = "time"
+times[:] = timesince
+
+air_temp = rootgrp.createVariable("air_temp","f4", ("time",))
+air_temp.units = "Kelvin"
+air_temp.reference = "DMI historical data: Greenland - DMI Historical Climate Data Collection 1784-2019, DMIRep_20-04.pdf"
+air_temp.standard_name = "air_temperature"
+air_temp.long_name = "Air temperature"
+
+precipitation = rootgrp.createVariable("precipitation","f4", ("time",))
+precipitation.units = "kg m-2 s-1"
+precipitation.reference = "DMI historical data: Greenland - DMI Historical Climate Data Collection 1784-2019, DMIRep_20-04.pdf"
+precipitation.standard_name = "precipitation"
+precipitation.long_name = "Precipitation"
+
+
+
+
+# Generate the conversion factor from mm/month to kg/(m2*s)
+# Use the fact that 1 mm of water corresponds to 1 kg of water over a square meter (because the density of water is 1 kg/L).
+mm_to_kg_per_m2 = 1 #1000
+# Convert monthly rate to a per-second rate (assuming an average month length of 30.44 days)
+month_to_s = 1 / (30.44 * 24 * 60 * 60)
+# Calculate the conversion factor
+prec_conversion_factor =  mm_to_kg_per_m2 * month_to_s
+
+
+undercatch = 1.4 #2.5
+# Fill in the data and convert units and correct undercatch
+air_temp[:] = df_filled['temp (C)'].values+273.15
+precipitation[:] = df_filled['prec (mm/month)']*undercatch*prec_conversion_factor
+#times[:] = timesince
+
+rootgrp.close()
+
+#+END_SRC
+
+#+RESULTS:
+: None
+
+
+#+BEGIN_SRC sh
+ncap2 -O -s 'defdim("nv",2);time_bnds=make_bounds(time,$nv,"time_bnds");' \
+      pism_files/forcing/pism_one_station_dmi_tas_noleap_plus40pct.nc pism_files/forcing/pism_one_station_dmi_tas_noleap_plus40pct-with-bounds.nc
+
+#+END_SRC
+
+#+RESULTS:
+
+
+
+
+**** Create dmi temperature and perturbed -20% precipitation forcing file using the noleap calendar
+
+#+BEGIN_SRC python
+import pandas as pd
+from netCDF4 import Dataset
+import numpy as np
+import cftime
+from datetime import datetime
+
+df_filled = pd.read_csv('pism_files/forcing/csvs/dmi_tas_historical_temp_prec_filled.csv', parse_dates = True, index_col = 0)
+
+
+# Convert the time index to cftime dates with a 365-day calendar
+timesince = []
+for value in df_filled.index:
+    dt = pd.to_datetime(value)
+    # Assume the date represents the start of the month
+    cftime_date = cftime.DatetimeNoLeap(dt.year, dt.month, 1)
+    timesince.append((cftime_date - cftime.DatetimeNoLeap(1, 1, 1)).days)
+
+    
+# Create the NetCDF file and add dimensions
+filename = "pism_files/forcing/pism_one_station_dmi_tas_noleap_minus20pct.nc"
+rootgrp = Dataset(filename, "w", format="NETCDF4")
+
+# Create the time dimension
+time_dim = rootgrp.createDimension('time', len(df_filled.index))
+
+# Create the time variable and write attributes
+times = rootgrp.createVariable("time", "f4", ("time",))
+times.units = "days since 0001-01-01 00:00:00"
+times.axis = "T"
+times.calendar = "365_day"
+times.long_name = "time"
+times[:] = timesince
+
+air_temp = rootgrp.createVariable("air_temp","f4", ("time",))
+air_temp.units = "Kelvin"
+air_temp.reference = "DMI historical data: Greenland - DMI Historical Climate Data Collection 1784-2019, DMIRep_20-04.pdf"
+air_temp.standard_name = "air_temperature"
+air_temp.long_name = "Air temperature"
+
+precipitation = rootgrp.createVariable("precipitation","f4", ("time",))
+precipitation.units = "kg m-2 s-1"
+precipitation.reference = "DMI historical data: Greenland - DMI Historical Climate Data Collection 1784-2019, DMIRep_20-04.pdf"
+precipitation.standard_name = "precipitation"
+precipitation.long_name = "Precipitation"
+
+
+
+
+# Generate the conversion factor from mm/month to kg/(m2*s)
+# Use the fact that 1 mm of water corresponds to 1 kg of water over a square meter (because the density of water is 1 kg/L).
+mm_to_kg_per_m2 = 1 #1000
+# Convert monthly rate to a per-second rate (assuming an average month length of 30.44 days)
+month_to_s = 1 / (30.44 * 24 * 60 * 60)
+# Calculate the conversion factor
+prec_conversion_factor =  mm_to_kg_per_m2 * month_to_s
+
+
+undercatch = 0.8 #2.5
+# Fill in the data and convert units and correct undercatch
+air_temp[:] = df_filled['temp (C)'].values+273.15
+precipitation[:] = df_filled['prec (mm/month)']*undercatch*prec_conversion_factor
+#times[:] = timesince
+
+rootgrp.close()
+
+#+END_SRC
+
+#+RESULTS:
+: None
+
+
+#+BEGIN_SRC sh
+ncap2 -O -s 'defdim("nv",2);time_bnds=make_bounds(time,$nv,"time_bnds");' \
+      pism_files/forcing/pism_one_station_dmi_tas_noleap_minus20pct.nc pism_files/forcing/pism_one_station_dmi_tas_noleap_minus20pct-with-bounds.nc
+
+#+END_SRC
+
+#+RESULTS:
+
+
+
+**** Create standard deviation of temperature forcing file
+
+#+BEGIN_SRC python
+<<promice_load_functions>>
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+
+tas_a = pd.read_csv('data/promice/TAS_A_hour.csv', index_col = 0, parse_dates = True )
+tas_l = pd.read_csv('data/promice/TAS_L_hour.csv', index_col = 0, parse_dates = True )
+
+tas_a_std = tas_a['t_u'].resample('M').std()
+tas_a_std_month = tas_a_std.groupby(tas_a_std.index.month).mean()
+
+      
+tas_l_std = tas_l['t_u'].resample('M').std()
+tas_l_std_month = tas_l_std.groupby(tas_l_std.index.month).mean()
+
+std_mean = (tas_l_std_month+tas_a_std_month)/2
+std_mean.to_csv('pism_files/forcing/csvs/air_temp_sd_PROMICE_mean.csv', index = True)
+
+fig, ax = plt.subplots(1,1,figsize=(5,5))
+tas_a_std_month.plot(ax = ax, label = 'tas_a')
+tas_l_std_month.plot(ax = ax, label = 'tas_l')
+std_mean.plot(ax = ax, label = 'mean')
+ax.legend()
+ax.set_ylabel('std dev')
+ax.set_xlabel('months')
+fig.savefig('figures/standard_deviation_monthly.png', dpi = 300)
+plt.show()
+
+#+END_SRC
+
+#+RESULTS:
+: None
+
+
+#+BEGIN_SRC python
+<<promice_load_functions>>
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+
+tas_a = pd.read_csv('data/promice/TAS_A_hour.csv', index_col = 0, parse_dates = True )
+tas_l = pd.read_csv('data/promice/TAS_L_hour.csv', index_col = 0, parse_dates = True )
+
+tas_a_std = tas_a['t_u'].resample('W').std()
+tas_a_std_month = tas_a_std.groupby(tas_a_std.index.month).mean()
+
+      
+tas_l_std = tas_l['t_u'].resample('W').std()
+tas_l_std_month = tas_l_std.groupby(tas_l_std.index.month).mean()
+
+std_mean = (tas_l_std_month+tas_a_std_month)/2
+std_mean.to_csv('csvs/air_temp_sd_PROMICE_mean.csv', index = True)
+
+fig, ax = plt.subplots(1,1,figsize=(5,5))
+tas_a_std_month.plot(ax = ax, label = 'tas_a')
+tas_l_std_month.plot(ax = ax, label = 'tas_l')
+std_mean.plot(ax = ax, label = 'mean')
+ax.legend()
+ax.set_ylabel('std dev')
+ax.set_xlabel('months')
+fig.savefig('figures/standard_deviation_weekly.png', dpi = 300)
+plt.show()
+
+#+END_SRC
+
+#+RESULTS:
+: None
+
+
+
+*** Creating artificial climates
+**** Create the cold climate and 1776 to 1896 and plot the forcing cycle
+#+begin_src python
+import pandas as pd
+from pandas.tseries.offsets import DateOffset
+import matplotlib.pyplot as plt
+
+dmi = pd.read_csv('pism_files/forcing/csvs/dmi_tas_historical_temp_prec_filled.csv', parse_dates = True, index_col = 0)
+#print(dmi)
+
+#print(len(dmi.resample('Y')))
+dmi_cold = dmi['1-Jan-1897':].copy() 
+
+dmi_cold.index = dmi_cold.index - DateOffset(years=124)
+
+dmi_cold.loc['1776':'1799'] = dmi.loc['1897':'1920'].values
+
+dmi_cold.loc['1800':'1823'] = dmi.loc['1897':'1920'].values
+dmi_cold.loc['1824':'1847'] = dmi.loc['1897':'1920'].values
+dmi_cold.loc['1848':'1871'] = dmi.loc['1897':'1920'].values
+
+dmi_cold.loc['1872':'1896'] = dmi.loc['1896':'1920'].values
+
+dmi_cold = dmi_cold.loc['1776':'1896']
+
+dmi_annual = dmi.resample('Y').mean()
+dmi_annual.set_index(dmi_annual.index.year.astype(int), inplace = True, drop=True)
+
+dmi_cold_annual = dmi_cold.resample('Y').mean()
+dmi_cold_annual.set_index(dmi_cold_annual.index.year.astype(int), inplace = True, drop=True)
+
+dmi_init = dmi_cold_annual.copy()
+dmi_init.index = dmi_cold_annual.index - 120
+
+
+
+
+fig, ax = plt.subplots(2,1, figsize = (10,5))
+
+
+dmi_init['temp (C)'].plot(ax = ax[0], color = 'green')
+dmi_cold_annual['temp (C)'].plot(ax = ax[0])
+dmi_annual['temp (C)'].plot(ax = ax[0], color = 'tab:orange')
+ax[0].set_ylabel('$^\circ$C')
+
+dmi_init['prec (mm/month)'].plot(ax = ax[1], color = 'green')
+dmi_cold_annual['prec (mm/month)'].plot(ax = ax[1])
+dmi_annual['prec (mm/month)'].plot(ax = ax[1], color = 'tab:orange')
+
+ax[1].set_ylabel(' mm/month')
+
+# --- Panel labels (added here) ---
+ax[0].text(0.02, 0.92, "(a)", transform=ax[0].transAxes,
+           fontsize=12, fontweight="bold")
+ax[1].text(0.02, 0.92, "(b)", transform=ax[1].transAxes,
+           fontsize=12, fontweight="bold")
+
+fig.savefig('figures/paper/one_weather_station_forcing.png', dpi = 300)
+plt.show()
+dmi_cold.to_csv('pism_files/forcing/csvs/cold_climate_1776_1896.csv')
+#+end_src
+
+#+RESULTS:
+: None
+
+***** Create netcdf forcing file noleap
+
+#+BEGIN_SRC python
+import pandas as pd
+from netCDF4 import Dataset
+import numpy as np
+from datetime import datetime
+
+df_filled = pd.read_csv('pism_files/forcing/csvs/cold_climate_1776_1896.csv', parse_dates = True, index_col = 0)
+
+#there is something funky with the no leap calendar so I need to add 2 years
+df_filled.index = df_filled.index + DateOffset(years=2)
+
+# Convert the time index to cftime dates with a 365-day calendar
+timesince = []
+for value in df_filled.index:
+    dt = pd.to_datetime(value)
+    # Assume the date represents the start of the month
+    cftime_date = cftime.DatetimeNoLeap(dt.year, dt.month, 1)
+    timesince.append((cftime_date - cftime.DatetimeNoLeap(1, 1, 1)).days)
+
+    
+# Create the NetCDF file and add dimensions
+filename = "pism_files/forcing/pism_one_station_tas_cold_noleap.nc"
+rootgrp = Dataset(filename, "w", format="NETCDF4")
+
+# Create the time dimension
+time_dim = rootgrp.createDimension('time', len(df_filled.index))
+
+# Create the time variable and write attributes
+times = rootgrp.createVariable("time", "f4", ("time",))
+times.units = "days since 0001-01-01 00:00:00"
+times.axis = "T"
+times.calendar = "365_day"
+times.long_name = "time"
+times[:] = timesince
+
+air_temp = rootgrp.createVariable("air_temp","f4", ("time",))
+air_temp.units = "Kelvin"
+air_temp.reference = "Artificial cold climate generated by repreating DMI Tasiilaq climate from 1897 to 1920"
+air_temp.standard_name = "air_temperature"
+air_temp.long_name = "Air temperature"
+
+precipitation = rootgrp.createVariable("precipitation","f4", ("time",))
+precipitation.units = "kg m-2 s-1"
+precipitation.reference = "Artificial cold climate generated by repreating DMI Tasiilaq climate from 1897 to 1920"
+precipitation.standard_name = "precipitation"
+precipitation.long_name = "Precipitation"
+
+
+# Generate the conversion factor from mm/month to kg/(m2*s)
+# Use the fact that 1 mm of water corresponds to 1 kg of water over a square meter (because the density of water is 1 kg/L).
+mm_to_kg_per_m2 = 1 #1000
+# Convert monthly rate to a per-second rate (assuming an average month length of 30.44 days)
+month_to_s = 1 / (30.44 * 24 * 60 * 60)
+# Calculate the conversion factor
+prec_conversion_factor =  mm_to_kg_per_m2 * month_to_s
+
+undercatch = 1
+# Fill in the data and convert units
+air_temp[:] = df_filled['temp (C)'].values+273.15
+precipitation[:] = df_filled['prec (mm/month)']*undercatch*prec_conversion_factor
+
+
+
+rootgrp.close()
+
+#+END_SRC
+
+#+RESULTS:
+: None
+pism_one_station_tas_cold.nc
+
+#+BEGIN_SRC sh
+ncap2 -O -s 'defdim("nv",2);time_bnds=make_bounds(time,$nv,"time_bnds");' \
+      pism_files/forcing/pism_one_station_tas_cold_noleap.nc pism_files/forcing/pism_one_station_tas_cold_noleap-with-bounds.nc
+
+#+END_SRC
+
+#+RESULTS:
+
+
+
+*** Lapserate between DMI station and the tas stations
+#+BEGIN_SRC python
+<<promice_load_functions>>
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+
+dmi = pd.read_csv('pism_files/forcing/csvs/dmi_tas_historical_temp_prec_filled.csv', parse_dates = True, index_col = 0)
+
+tas_a = pd.read_csv('data/promice/TAS_A_hour.csv', index_col = 0, parse_dates = True)
+tas_l = pd.read_csv('data/promice/TAS_L_hour.csv', index_col = 0, parse_dates = True)
+
+Ta = tas_a['t_u'].resample('M').mean()
+Tl = tas_l['t_u'].resample('M').mean()
+za = tas_a['gps_alt'].median()
+zl = tas_l['gps_alt'].median()
+Tdmi = dmi['temp (C)'].resample('M').mean()
+zdmi = 53
+
+joined = pd.merge(Ta, Tl, left_index=True, right_index=True)
+
+joined = pd.merge(joined,Tdmi, left_index=True, right_index=True)
+
+joined.columns = ['tas_a', 'tas_l','dmi']
+joined['ice lapserate'] = (joined['tas_a']-joined['tas_l'])/(za-zl)*1000
+joined['land to ice lapserate'] = (joined['tas_a']-joined['dmi'])/(za-zdmi)*1000
+joined['Month'] = joined.index.month
+
+joined_monthly = joined.groupby('Month').mean()
+print(joined_monthly)
+print(joined_monthly.mean())
+
+fig, ax = plt.subplots(1,1)
+joined_monthly[['ice lapserate','land to ice lapserate']].plot(ax=ax)
+fig.savefig('figures/lapserates.png')
+#+END_SRC
+
+#+RESULTS:
+: None
+
+
+*** Check for datagaps in forcing
+
+#+BEGIN_SRC python
+import numpy as np
+import pandas as pd
+import xarray as xr
+import matplotlib.pyplot as plt
+
+# Load the NetCDF file
+file_path = 'pism_files/forcing/pism_one_station_dmi_tas_noleap-with-bounds.nc'
+df_filled = pd.read_csv('pism_files/forcing/csvs/dmi_tas_historical_temp_prec_filled.csv', parse_dates
+                        = True, index_col = 0)
+df_filled['prec (mm/month)'].plot()
+with xr.open_dataset(file_path) as ds:
+    print(ds.time.data)
+    #ds['precipitation'].plot()
+    
+plt.show()
+
+#+END_SRC
+
+#+RESULTS:
+: None
+
+
+** Make the initial spinup
+*** Spinup - Greenland constant climate, grid sequencing
+
+**** First run: The hybrid 20km 10ka 
+ #+BEGIN_SRC sh :eval never :tangle scripts/g20km_10ka.sh
+#!/bin/bash
+PARAM_PPQ=0.5 ./spinup.sh 8 const 10000 20 hybrid g20km_10ka_hy.nc > out.g20km_10ka_hy
+ #+END_SRC
+
+
+***** spinup_maxdiff.sh
+#+begin_src bash :tangle scripts/spinup_maxdiff.sh
+#!/bin/bash
+
+# Copyright (C) 2009-2015, 2017, 2018 The PISM Authors
+
+# PISM Greenland spinup using either constant present-day climate or modeled
+# paleoclimate.  See README.md.
+
+# Before using this script, run preprocess.sh to download and adjust metadata
+# in the SeaRISE "Present Day Greenland" master dataset.
+
+set -e  # exit on error
+
+GRIDLIST="{40, 20, 10, 5, 3, 2}"
+CLIMLIST="{const, paleo}"
+DYNALIST="{sia, hybrid}"
+
+# preprocess.sh generates pism_*.nc files; run it first
+PISM_DATAVERSION=1
+PISM_DATANAME=pism_greenland_1km_v$PISM_DATAVERSION.nc
+PISM_TEMPSERIES=pism_dT.nc
+PISM_SLSERIES=pism_dSL.nc
+
+if [ $# -lt 5 ] ; then
+  cat - <<EOF
+spinup.sh ERROR: needs 5 or 6 or 7 positional arguments ... ENDING NOW
+
+usage:
+
+    spinup.sh PROCS CLIMATE DURATION GRID DYNAMICS [OUTFILE] [BOOTFILE]
+
+  where:
+    PROCS     = 1,2,3,... is number of MPI processes
+    CLIMATE   in $CLIMLIST
+    DURATION  = model run time in years; does '-ys -DURATION -ye 0'
+    GRID      in $GRIDLIST (km)
+    DYNAMICS  in $DYNALIST; sia is non-sliding; default = sia
+    OUTFILE   optional name of output file; default = unnamed.nc
+    BOOTFILE  optional name of input file; default = $PISM_DATANAME
+
+consider setting optional environment variables (see script for meaning):
+    EXSTEP       spacing in years between -extra_files outputs; defaults to 100
+    EXVARS       desired -extra_vars; defaults to 'diffusivity,temppabase,
+                   tempicethk_basal,bmelt,tillwat,velsurf_mag,mask,thk,topg,usurf'
+                   plus ',hardav,velbase_mag,tauc' if DYNAMICS=hybrid
+    NODIAGS      if set, DON'T use -ts_file or -extra_file
+    USEPIK       if set, add -pik -subgl
+    PARAM_PPQ    sets (hybrid-only) option -pseudo_plastic_q \$PARAM_PPQ
+                   [default=0.25]
+    PARAM_SIAE   sets option -sia_e \$PARAM_SIAE   [default=3.0]
+    PARAM_TEFO   sets (hybrid-only) option -till_effective_fraction_overburden
+                   \$PARAM_TEFO   [default=0.02]
+    PARAM_TTPHI  sets (hybrid-only) option -topg_to_phi \$PARAM_TTPHI
+                   [default=15.0,40.0,-300.0,700.0]
+    PARAM_NOSGL  if set, DON'T use -tauc_slippery_grounding_lines
+    PISM_DO      set to 'echo' if no run desired; defaults to empty
+    PISM_MPIDO   defaults to 'mpiexec -n'
+    PISM_BIN  set to path to pismr executable if desired; defaults to empty
+    PISM_EXEC    defaults to 'pismr'
+    REGRIDFILE   set to file name to regrid from; defaults to empty (no regrid)
+    REGRIDVARS   desired -regrid_vars; applies *if* REGRIDFILE set;
+                   defaults to 'basal_melt_rate_grounded,enthalpy,litho_temp,thk,tillwat'
+
+example usage 1:
+
+    $ ./spinup.sh 4 const 1000 20 sia
+
+  Does spinup with 4 processors, constant-climate, 1000 year run, 20 km
+  grid, and non-sliding SIA stress balance.  Bootstraps from and outputs to
+  default files.
+
+example usage 2:
+
+    $ PISM_DO=echo ./spinup.sh 128 paleo 100.0 5 hybrid out.nc boot.nc &> foo.sh
+
+  Creates a script foo.sh for spinup with 128 processors, simulated paleo-climate,
+  5 km grid, sliding with SIA+SSA hybrid, output to {out.nc,ts_out.nc,ex_out.nc},
+  and bootstrapping from boot.nc.
+EOF
+  exit
+fi
+
+if [ -n "${SCRIPTNAME:+1}" ] ; then
+  echo "[SCRIPTNAME=$SCRIPTNAME (already set)]"
+  echo ""
+else
+  SCRIPTNAME="#(spinup.sh)"
+fi
+
+if [ $# -gt 7 ] ; then
+  echo "$SCRIPTNAME WARNING: ignoring arguments after argument 7 ..."
+fi
+
+NN="$1" # first arg is number of processes
+DURATION=$3
+RUNSTARTEND="-ys -$DURATION -ye 0"
+
+# set coupler from argument 2
+if [ "$2" = "const" ]; then
+  climname="constant-climate"
+  INLIST=""
+  COUPLER="-surface given -surface_given_file $PISM_DATANAME"
+elif [ "$2" = "paleo" ]; then
+  climname="paleo-climate"
+  INLIST="$PISM_TEMPSERIES $PISM_SLSERIES"
+  COUPLER=" -bed_def lc -atmosphere searise_greenland,delta_T,paleo_precip -surface pdd -atmosphere_paleo_precip_file $PISM_TEMPSERIES -atmosphere_delta_T_file $PISM_TEMPSERIES -sea_level constant,delta_sl -ocean_delta_sl_file $PISM_SLSERIES"
+else
+  echo "invalid second argument; must be in $CLIMLIST"
+  exit
+fi
+
+# decide on grid and skip from argument 4
+COARSESKIP=10
+FINESKIP=20
+FINESTSKIP=50
+VDIMS="-Lz 4500 -Lbz 2000 -skip -skip_max "
+COARSEVGRID="-Mz 101 -Mbz 11 -z_spacing equal ${VDIMS} ${COARSESKIP}"
+FINEVGRID="-Mz 201 -Mbz 21 -z_spacing equal ${VDIMS} ${FINESKIP}"
+FINESTVGRID="-Mz 401 -Mbz 41 -z_spacing equal ${VDIMS} ${FINESTSKIP}"
+
+# native resolution in the data file is y=2516, x=1449 with a 1 km grid. Thus a 20 km grid is Mx=73 ,My=126 
+
+if [ "$4" -eq "20" ]; then
+  dx=20
+  myMx=73
+  myMy=126
+  vgrid=$COARSEVGRID
+elif [ "$4" -eq "10" ]; then
+  dx=10
+  myMx=150
+  myMy=252
+  vgrid=$FINEVGRID
+elif [ "$4" -eq "5" ]; then
+  dx=5
+  myMx=290
+  myMy=503
+  vgrid=$FINEVGRID
+else
+  echo "invalid fourth argument: must be in $GRIDLIST"
+  exit
+fi
+
+grid="-Mx $myMx -My $myMy $vgrid -grid.recompute_longitude_and_latitude false -grid.registration corner"
+
+# set stress balance from argument 5
+if [ -n "${PARAM_SIAE:+1}" ] ; then  # check if env var is already set
+  PHYS="-calving ocean_kill -ocean_kill_file ${PISM_DATANAME} -sia_e ${PARAM_SIAE}"
+else
+  PHYS="-calving ocean_kill -ocean_kill_file ${PISM_DATANAME} -sia_e 3.0"
+fi
+if [ -n "${USEPIK:+1}" ] ; then  # check if env var is already set
+  PHYS="${PHYS} -pik -subgl"
+fi
+
+# done forming $PHYS if "$5" = "sia"
+if [ "$5" = "hybrid" ]; then
+  if [ -z "${PARAM_TTPHI}" ] ; then  # check if env var is NOT set
+    PARAM_TTPHI="15.0,40.0,-300.0,700.0"
+  fi
+  if [ -z "${PARAM_PPQ}" ] ; then  # check if env var is NOT set
+    PARAM_PPQ="0.25"
+  fi
+  if [ -z "${PARAM_TEFO}" ] ; then  # check if env var is NOT set
+    PARAM_TEFO="0.02"
+  fi
+  if [ -z "${PARAM_NOSGL}" ] ; then  # check if env var is NOT set
+    SGL="-tauc_slippery_grounding_lines"
+  else
+    SGL=""
+  fi
+  PHYS="${PHYS} -stress_balance ssa+sia -topg_to_phi ${PARAM_TTPHI} -pseudo_plastic -pseudo_plastic_q ${PARAM_PPQ} -till_effective_fraction_overburden ${PARAM_TEFO} ${SGL}"
+else
+  if [ "$5" = "sia" ]; then
+    echo "$SCRIPTNAME  sia-only case: ignoring PARAM_TTPHI, PARAM_PPQ, PARAM_TEFO ..."
+  else
+    echo "invalid fifth argument; must be in $DYNALIST"
+    exit
+  fi
+fi
+
+# set output filename from argument 6
+if [ -z "$6" ]; then
+  OUTNAME=unnamed.nc
+else
+  OUTNAME=$6
+fi
+
+# set bootstrapping input filename from argument 6
+if [ -z "$7" ]; then
+  INNAME=$PISM_DATANAME
+else
+  INNAME=$7
+fi
+INLIST="${INLIST} $INNAME $REGRIDFILE"
+
+# now we have read options ... we know enough to report to user ...
+echo
+echo "# ======================================================================="
+echo "# PISM std Greenland spinup:"
+echo "#    $NN processors, $DURATION a run, $dx km grid, $climname, $5 dynamics"
+echo "# ======================================================================="
+
+# actually check for input files
+for INPUT in $INLIST; do
+  if [ -e "$INPUT" ] ; then  # check if file exist
+    echo "$SCRIPTNAME           input   $INPUT (found)"
+  else
+    echo "$SCRIPTNAME           input   $INPUT (MISSING!!)"
+    echo
+    echo "$SCRIPTNAME  ***WARNING***  you may need to run ./preprocess.sh to generate standard input files!"
+    echo
+  fi
+done
+
+echo "$SCRIPTNAME              NN = $NN"
+
+# set MPIDO if using different MPI execution command, for example:
+#  $ export PISM_MPIDO="aprun -n "
+if [ -n "${PISM_MPIDO:+1}" ] ; then  # check if env var is already set
+  echo "$SCRIPTNAME      PISM_MPIDO = $PISM_MPIDO  (already set)"
+else
+  PISM_MPIDO="mpiexec -n "
+  echo "$SCRIPTNAME      PISM_MPIDO = $PISM_MPIDO"
+fi
+
+# check if env var PISM_DO was set (i.e. PISM_DO=echo for a 'dry' run)
+if [ -n "${PISM_DO:+1}" ] ; then  # check if env var DO is already set
+  echo "$SCRIPTNAME         PISM_DO = $PISM_DO  (already set)"
+else
+  PISM_DO="" 
+fi
+
+# prefix to pism (not to executables)
+if [ -n "${PISM_BIN:+1}" ] ; then  # check if env var is already set
+  echo "$SCRIPTNAME     PISM_BIN = $PISM_BIN  (already set)"
+else
+  PISM_BIN=""    # just a guess
+  echo "$SCRIPTNAME     PISM_BIN = $PISM_BIN"
+fi
+
+# set PISM_EXEC if using different executables, for example:
+#  $ export PISM_EXEC="pismr -energy cold"
+if [ -n "${PISM_EXEC:+1}" ] ; then  # check if env var is already set
+  echo "$SCRIPTNAME       PISM_EXEC = $PISM_EXEC  (already set)"
+else
+  PISM_EXEC="pismr"
+  echo "$SCRIPTNAME       PISM_EXEC = $PISM_EXEC"
+fi
+
+# set EXSTEP to default if not set
+if [ -n "${EXSTEP:+1}" ] ; then  # check if env var is already set
+  echo "$SCRIPTNAME          EXSTEP = $EXSTEP  (already set)"
+else
+  EXSTEP="100"
+  echo "$SCRIPTNAME          EXSTEP = $EXSTEP"
+fi
+
+# set EXVARS list to defaults if not set
+if [ -n "${EXVARS:+1}" ] ; then  # check if env var is already set
+  echo "$SCRIPTNAME          EXVARS = $EXVARS  (already set)"
+else
+  EXVARS="diffusivity,temppabase,tempicethk_basal,bmelt,tillwat,velsurf_mag,mask,thk,topg,usurf"
+  if [ "$5" = "hybrid" ]; then
+    EXVARS="${EXVARS},hardav,velbase_mag,tauc"
+  fi
+  echo "$SCRIPTNAME          EXVARS = $EXVARS"
+fi
+
+# if REGRIDFILE set then form regridcommand
+if [ -n "${REGRIDFILE:+1}" ] ; then  # check if env var is already set
+  echo "$SCRIPTNAME      REGRIDFILE = $REGRIDFILE"
+  if [ -n "${REGRIDVARS:+1}" ] ; then  # check if env var is already set
+    echo "$SCRIPTNAME      REGRIDVARS = $REGRIDVARS  (already set)"
+  else
+    REGRIDVARS='litho_temp,thk,enthalpy,tillwat,basal_melt_rate_grounded'
+    # note: other vars which are "state":  Href, dbdt, shelfbtemp, shelfbmassflux
+    echo "$SCRIPTNAME      REGRIDVARS = $REGRIDVARS"
+  fi
+  regridcommand="-regrid_file $REGRIDFILE -regrid_vars $REGRIDVARS"
+else
+  regridcommand=""
+fi
+
+# show remaining setup options:
+PISM="${PISM_BIN}${PISM_EXEC}"
+echo "$SCRIPTNAME      executable = '$PISM'"
+echo "$SCRIPTNAME         coupler = '$COUPLER'"
+echo "$SCRIPTNAME        dynamics = '$PHYS'"
+
+# set up diagnostics
+if [ -z "${NODIAGS}" ] ; then  # check if env var is NOT set
+  TSNAME=ts_$OUTNAME
+  TSTIMES=-$DURATION:yearly:0
+  EXNAME=ex_$OUTNAME
+  EXTIMES=-$DURATION:$EXSTEP:0
+  # check_stationarity.py can be applied to $EXNAME
+  DIAGNOSTICS="-ts_file $TSNAME -ts_times $TSTIMES -extra_file $EXNAME -extra_times $EXTIMES -extra_vars $EXVARS"
+else
+  DIAGNOSTICS=""
+fi
+
+# construct command
+cmd="$PISM_MPIDO $NN $PISM -i $INNAME -bootstrap ${grid} $RUNSTARTEND $regridcommand -stress_balance.sia.max_diffusivity 50000 $COUPLER $PHYS $DIAGNOSTICS -o $OUTNAME"
+echo
+$PISM_DO $cmd
+
+
+#+end_src
+**** gridseq run
+
+ #+BEGIN_SRC sh :eval never :tangle scripts/gridseq_maxdiff.sh
+#!/bin/bash
+NN=8
+export PARAM_PPQ=0.5
+export REGRIDFILE=g20km_10ka_hy.nc
+export EXSTEP=100
+./spinup_maxdiff.sh $NN const 6000 10 hybrid g10km_gridseq_maxdiff.nc 
+export REGRIDFILE=g10km_gridseq_maxdiff.nc
+export EXSTEP=10
+./spinup_maxdiff.sh $NN const 1000 5 hybrid g5km_gridseq_maxdiff.nc
+ #+END_SRC
+
+***** Run the 5km run for 2000 years more to crate g5km_gridseq_maxdiff_3ka.nc
+
+ In the above gridseq run - a 1000 year run on 5 km does not become stable - thus I will try with 2000 years more
+
+ #+BEGIN_SRC sh :eval never :tangle scripts/gridseq_maxdiff_3ka.sh
+#!/bin/bash
+NN=8
+export PARAM_PPQ=0.5
+export REGRIDFILE=g5km_gridseq_maxdiff.nc
+export EXSTEP=10
+./spinup_maxdiff.sh $NN const 2000 5 hybrid g5km_gridseq_maxdiff_3ka.nc
+ #+END_SRC
+
+*** Creating a BC file for the regional models
+
+ #+BEGIN_SRC sh :eval yes
+WHOLE=model_output/g5km_gridseq_maxdiff_3ka.nc
+BCFILE=pism_files/g5km_bc.nc
+echo "creating PISM-readable boundary conditions file $BCFILE from whole ice sheet result ..."
+ncks -O -v u_ssa,v_ssa,basal_melt_rate_grounded,tillwat,enthalpy,litho_temp $WHOLE $BCFILE
+# rename bmelt and u_ssa and v_ssa so that they are used as b.c.
+ncrename -O -v u_ssa,u_ssa_bc -v v_ssa,v_ssa_bc $BCFILE
+echo "... done"
+echo
+ #+END_SRC
+
+
+
+
+
+
+** Bootstrap and make regional
+*** Runs
+
+#+BEGIN_SRC bash :tangle Scripts/no_mass_E3_v4.0.sh
+#!/bin/bash
+E=3
+dT=-6.5
+temp_sd=1.8
+dT_precip=-6.5
+dPdz=-0.095
+OUTFILENAME=no_mass_E${E}_v4.0
+<<bootstrap_and_make_regional>>
+#+END_SRC
+
+
+*** Main script
+
+#+NAME: bootstrap_and_make_regional
+#+BEGIN_SRC bash 
+# check if env var PISM_DO was set (i.e. PISM_DO=echo for a 'dry' run)
+if [ -n "${PISM_DO:+1}" ] ; then  
+  echo "$SCRIPTNAME         PISM_DO = $PISM_DO  (already set)"
+else
+  PISM_DO="" 
+fi
+
+BOOT=pism_greenland_1km_v3-filled.nc
+PISM_ONESTATION=pism_one_station_tas_cold_noleap-with-bounds.nc
+FIRN_DEPTH=firn_depth.nc
+#PDD_STD=air_temp_sd_file_cold.nc
+
+EXDT=50
+BCFILE=g5km_bc.nc
+
+regridcommand="-regrid_file $BCFILE -regrid_vars basal_melt_rate_grounded,tillwat,enthalpy,litho_temp"
+
+
+# Set model options
+EXVARS='thk,velsurf_mag,diffusivity,bmelt'
+
+
+CLIMATE="-atmosphere one_station,elevation_change \
+		     -atmosphere.one_station.file $PISM_ONESTATION \
+		     -atmosphere.elevation_change.file $BOOT \
+		     -atmosphere.elevation_change.temperature_lapse_rate $dT \
+		     -atmosphere.elevation_change.precip_adjustment shift \
+		     -atmosphere.elevation_change.precipitation.lapse_rate $dPdz \
+		     -surface pdd \
+		     -surface.pdd.std_dev.value ${temp_sd} \
+		     -sea_level constant "
+
+PHYS="-no_mass -pik -sia_e ${E} -stress_balance ssa+sia -topg_to_phi 15.0,40.0,-300.0,700.0 -till_effective_fraction_overburden 0.02 -pseudo_plastic -pseudo_plastic_q 0.25 -tauc_slippery_grounding_lines"
+# -calving float_kill -float_kill_margin_only -calving.float_kill.calve_near_grounding_line false
+RUNSTART=1778
+RUNEND=1896
+
+
+NN=24
+firstnode=0
+lastnode=24
+
+xmin=80793.
+ymin=-2650282.
+xmax=388422.
+ymax=-2226046.
+
+
+# Set paralell run options
+PISM="taskset -c ${firstnode}-${lastnode} pismr -regional"
+
+cmd="mpiexec -n $NN $PISM -bootstrap -i $BOOT \
+    -x_range $xmin,$xmax \
+    -y_range $ymin,$ymax \ 
+    -Lz 4000 -Lbz 1000 -Mz 201 -Mbz 51 \
+    -stress_balance.sia.max_diffusivity 500000 \
+    -no_model_strip 10 \   
+    $regridcommand \
+    $PHYS \
+    -regional.zero_gradient true \
+    -extra_file ex_${OUTFILENAME}.nc -extra_times $RUNSTART:$EXDT:$RUNEND \
+    -extra_vars $EXVARS \
+    -ts_file ts_${OUTFILENAME}.nc -ts_times $RUNSTART:yearly:$RUNEND \
+    $CLIMATE -ys $RUNSTART -ye $RUNEND -o ${OUTFILENAME}.nc"
+$PISM_DO $cmd
+
+
+
+  #+END_SRC
+
+
+  
+  
+
+** No mass run cycles
+
+#+BEGIN_SRC bash :tangle scripts/no_mass_2nd_cycle_E3_v4.2.sh
+#!/bin/bash
+E=3
+dT=-6.5
+dPdz=-0.095
+temp_sd=1.8
+EXDT=1
+EXVARS='thk,velsurf_mag,surface_melt_rate,surface_runoff_rate'
+TSTIME=monthly
+BOOT=no_mass_E${E}_v4.0.nc
+OUTFILENAME=no_mass_2nd_cycle_E${E}_v4.2.nc
+<<no_mass_run_v42>>
+#+END_SRC
+
+
+#+BEGIN_SRC bash :tangle scripts/no_mass_3rd_cycle_E3_v4.2.sh
+#!/bin/bash
+E=3
+dT=-6.5
+dPdz=-0.095
+temp_sd=1.8
+EXDT=1
+EXVARS='thk,velsurf_mag,surface_melt_rate,surface_runoff_rate'
+TSTIME=monthly
+BOOT=no_mass_2nd_cycle_E${E}_v4.2.nc.nc
+OUTFILENAME=no_mass_3rd_cycle_E${E}_v4.2
+<<no_mass_run_v42>>
+#+END_SRC
+
+
+#+BEGIN_SRC bash :tangle scripts/no_mass_4th_cycle_E3_v4.2.sh
+#!/bin/bash
+E=3
+dT=-6.5
+dPdz=-0.095
+temp_sd=1.8
+EXDT=1
+EXVARS='thk,velsurf_mag,surface_melt_rate,surface_runoff_rate'
+TSTIME=monthly
+BOOT=no_mass_3rd_cycle_E${E}_v4.2.nc
+OUTFILENAME=no_mass_4th_cycle_E${E}_v4.2
+<<no_mass_run_v42>>
+#+END_SRC
+
+#+BEGIN_SRC bash :tangle scripts/no_mass_5th_cycle_E3_v4.2.sh
+#!/bin/bash
+E=3
+dT=-6.5
+dPdz=-0.095
+temp_sd=1.8
+EXDT=1
+EXVARS='thk,velsurf_mag,surface_melt_rate,surface_runoff_rate'
+TSTIME=monthly
+BOOT=no_mass_4th_cycle_E${E}_v4.2.nc
+OUTFILENAME=no_mass_5th_cycle_E${E}_v4.2
+<<no_mass_run_v42>>
+#+END_SRC
+
+
+#+BEGIN_SRC bash :tangle scripts/no_mass_6th_cycle_E3_v4.2.sh
+#!/bin/bash
+E=3
+dT=-6.5
+dPdz=-0.095
+temp_sd=1.8
+EXDT=1
+EXVARS='thk,velsurf_mag,surface_melt_rate,surface_runoff_rate'
+TSTIME=monthly
+BOOT=no_mass_5th_cycle_E${E}_v4.2.nc
+OUTFILENAME=no_mass_6th_cycle_E${E}_v4.2
+<<no_mass_run_v42>>
+#+END_SRC
+
+#+BEGIN_SRC bash :tangle scripts/no_mass_7th_cycle_E3_v4.2.sh
+#!/bin/bash
+E=3
+dT=-6.5
+dPdz=-0.095
+temp_sd=1.8
+EXDT=1
+EXVARS='thk,velsurf_mag,surface_melt_rate,surface_runoff_rate'
+TSTIME=monthly
+BOOT=no_mass_6th_cycle_E${E}_v4.2.nc
+OUTFILENAME=no_mass_7th_cycle_E${E}_v4.2
+<<no_mass_run_v42>>
+#+END_SRC
+
+
+
+#+NAME: no_mass_run_v42
+#+BEGIN_SRC bash 
+
+# check if env var PISM_DO was set (i.e. PISM_DO=echo for a 'dry' run)
+if [ -n "${PISM_DO:+1}" ] ; then  
+  echo "$SCRIPTNAME         PISM_DO = $PISM_DO  (already set)"
+else
+  PISM_DO="" 
+fi
+PROJ_LIB=/usr/share/proj
+PISM_ONESTATION=pism_one_station_tas_cold_noleap-with-bounds.nc
+PISM_DATANAME=force_to_thickness_v2_ftt.nc
+
+
+regridcommand="-regrid_file $BCFILE -regrid_vars basal_melt_rate_grounded,tillwat,enthalpy,litho_temp"
+
+CLIMATE="-atmosphere one_station,elevation_change \
+		     -atmosphere.one_station.file $PISM_ONESTATION \
+		     -atmosphere.elevation_change.file $BOOT \
+		     -atmosphere.elevation_change.temperature_lapse_rate $dT \
+		     -atmosphere.elevation_change.precip_adjustment shift \
+		     -atmosphere.elevation_change.precipitation.lapse_rate $dPdz \
+		     -surface pdd,forcing \
+		     -force_to_thickness_file $PISM_DATANAME \
+		     -surface.pdd.std_dev.value ${temp_sd} \
+		     -sea_level constant "
+
+PHYS="-no_mass
+      -pik \
+      -sia_e ${E} \
+      -stress_balance ssa+sia \
+      -topg_to_phi 15.0,40.0,-300.0,700.0 \
+      -till_effective_fraction_overburden 0.02 \
+      -pseudo_plastic -pseudo_plastic_q 0.25 \
+      -tauc_slippery_grounding_lines "
+      #-calving float_kill \
+      #-calving.float_kill.margin_only false \
+      #-calving.float_kill.calve_near_grounding_line false "
+
+NN=20
+firstnode=25
+lastnode=45
+
+
+RUNSTART=1778
+RUNEND=1896
+
+
+
+xmin=80793.
+ymin=-2650282.
+xmax=388422.
+ymax=-2226046.
+
+# Set paralell run options
+PISM="taskset -c ${firstnode}-${lastnode} pismr -regional"
+
+cmd="mpiexec -n $NN $PISM -i $BOOT \
+    $PHYS \
+    -regional.zero_gradient true \ 
+    -stress_balance.sia.max_diffusivity 500000 \  
+    -extra_file ex_${OUTFILENAME}.nc -extra_times $RUNSTART:$EXDT:$RUNEND \
+    -extra_vars $EXVARS \
+    -ts_file ts_${OUTFILENAME}.nc -ts_times $RUNSTART:$TSTIME:$RUNEND \
+    $CLIMATE -ys $RUNSTART -ye $RUNEND -o ${OUTFILENAME}.nc"
+$PISM_DO $cmd
+
+
+
+  #+END_SRC
+
+
+
+
+
+** Runs with precip shift v4.2
+
+*** Relaxation runs 
+**** v4.2 runs E=3
+
+#+BEGIN_SRC bash :tangle scripts/relax_1st_cycle_E3_v4.2.sh
+#!/bin/bash
+E=3
+dT=-6.5
+dPdz=-0.095
+temp_sd=1.8
+EXDT=1
+EXVARS='thk,velsurf_mag,surface_melt_rate,surface_runoff_rate'
+TSTIME=monthly
+BOOT=no_mass_E${E}_v4.0.nc
+OUTFILENAME=relax_1st_cycle_calvingNG_false_calvingM_false_E3_v4.2
+<<relaxation_run_v42>>
+#+END_SRC
+
+#+BEGIN_SRC bash :tangle scripts/relax_2nd_cycle_E3_v4.2.sh
+#!/bin/bash
+E=3
+dT=-6.5
+dPdz=-0.095
+temp_sd=1.8
+EXDT=1
+EXVARS='thk,velsurf_mag,surface_melt_rate,surface_runoff_rate'
+TSTIME=yearly
+BOOT=relax_1st_cycle_calvingNG_false_calvingM_false_E3_v4.2.nc
+OUTFILENAME=relax_2nd_cycle_E${E}_v4.2 
+<<relaxation_run_v42>>
+#+END_SRC
+
+#+BEGIN_SRC bash :tangle scripts/relax_3rd_cycle_E3_v4.2.sh
+#!/bin/bash
+E=3
+dT=-6.5
+dPdz=-0.095
+temp_sd=1.8
+EXDT=1
+EXVARS='thk,velsurf_mag,surface_melt_rate,surface_runoff_rate'
+TSTIME=yearly
+BOOT=relax_2nd_cycle_E${E}_v4.2.nc
+OUTFILENAME=relax_3rd_cycle_E${E}_v4.2 
+<<relaxation_run_v42>>
+#+END_SRC
+
+#+BEGIN_SRC bash :tangle scripts/relax_4th_cycle_E3_v4.2.sh
+#!/bin/bash
+E=3
+dT=-6.5
+dPdz=-0.095
+temp_sd=1.8
+EXDT=1
+EXVARS='thk,velsurf_mag,surface_melt_rate,surface_runoff_rate'
+TSTIME=yearly
+BOOT=relax_3rd_cycle_E${E}_v4.2.nc
+OUTFILENAME=relax_4th_cycle_E${E}_v4.2 
+<<relaxation_run_v42>>
+#+END_SRC
+
+#+BEGIN_SRC bash :tangle scripts/relax_5th_cycle_E3_v4.2.sh
+#!/bin/bash
+E=3
+dT=-6.5
+dPdz=-0.095
+temp_sd=1.8
+EXDT=1
+EXVARS='thk,velsurf_mag,surface_melt_rate,surface_runoff_rate'
+TSTIME=yearly
+BOOT=relax_4th_cycle_E${E}_v4.2.nc
+OUTFILENAME=relax_5th_cycle_E${E}_v4.2 
+<<relaxation_run_v42>>
+#+END_SRC
+
+#+BEGIN_SRC bash :tangle scripts/relax_6th_cycle_E3_v4.2.sh
+#!/bin/bash
+E=3
+dT=-6.5
+dPdz=-0.095
+temp_sd=1.8
+EXDT=1
+EXVARS='thk,velsurf_mag,surface_melt_rate,surface_runoff_rate'
+TSTIME=yearly
+BOOT=relax_5th_cycle_E${E}_v4.2.nc
+OUTFILENAME=relax_6th_cycle_E${E}_v4.2 
+<<relaxation_run_v42>>
+#+END_SRC
+
+#+BEGIN_SRC bash :tangle scripts/relax_7th_cycle_E3_v4.2.sh
+#!/bin/bash
+E=3
+dT=-6.5
+dPdz=-0.095
+temp_sd=1.8
+EXDT=1
+EXVARS='thk,velsurf_mag,surface_melt_rate,surface_runoff_rate'
+TSTIME=yearly
+BOOT=relax_6th_cycle_E${E}_v4.2.nc
+OUTFILENAME=relax_7th_cycle_E${E}_v4.2 
+<<relaxation_run_v42>>
+#+END_SRC
+
+#+BEGIN_SRC bash :tangle scripts/relax_8th_cycle_E3_v4.2.sh
+#!/bin/bash
+E=3
+dT=-6.5
+dPdz=-0.095
+temp_sd=1.8
+EXDT=1
+EXVARS='thk,velsurf_mag,surface_melt_rate,surface_runoff_rate'
+TSTIME=yearly
+BOOT=relax_7th_cycle_E${E}_v4.2.nc
+OUTFILENAME=relax_8th_cycle_E${E}_v4.2 
+<<relaxation_run_v42>>
+#+END_SRC
+
+#+BEGIN_SRC bash :tangle scripts/relax_9th_cycle_E3_v4.2.sh
+#!/bin/bash
+E=3
+dT=-6.5
+dPdz=-0.095
+temp_sd=1.8
+EXDT=1
+EXVARS='thk,velsurf_mag,surface_melt_rate,surface_runoff_rate'
+TSTIME=yearly
+BOOT=relax_8th_cycle_E${E}_v4.2.nc
+OUTFILENAME=relax_9th_cycle_E${E}_v4.2 
+<<relaxation_run_v42>>
+#+END_SRC
+
+
+#+BEGIN_SRC bash :tangle scripts/relax_10th_cycle_E3_v4.2.sh
+#!/bin/bash
+E=3
+dT=-6.5
+dPdz=-0.095
+temp_sd=1.8
+EXDT=1
+EXVARS='thk,velsurf_mag,surface_melt_rate,surface_runoff_rate'
+TSTIME=yearly
+BOOT=relax_9th_cycle_E${E}_v4.2.nc
+OUTFILENAME=relax_10th_cycle_E${E}_v4.2 
+<<relaxation_run_v42>>
+#+END_SRC
+
+
+#+BEGIN_SRC bash :tangle scripts/relax_11th_cycle_E3_v4.2.sh
+#!/bin/bash
+E=3
+dT=-6.5
+dPdz=-0.095
+temp_sd=1.8
+EXDT=1
+EXVARS='thk,velsurf_mag,surface_melt_rate,surface_runoff_rate'
+TSTIME=yearly
+BOOT=relax_10th_cycle_E${E}_v4.2.nc
+OUTFILENAME=relax_11th_cycle_E${E}_v4.2 
+<<relaxation_run_v42>>
+#+END_SRC
+
+#+BEGIN_SRC bash :tangle scripts/relax_12th_cycle_E3_v4.2.sh
+#!/bin/bash
+E=3
+dT=-6.5
+dPdz=-0.095
+temp_sd=1.8
+EXDT=1
+EXVARS='thk,velsurf_mag,surface_melt_rate,surface_runoff_rate'
+TSTIME=yearly
+BOOT=relax_11th_cycle_E${E}_v4.2.nc
+OUTFILENAME=relax_12th_cycle_E${E}_v4.2 
+<<relaxation_run_v42>>
+#+END_SRC
+
+
+
+**** main scripts
+
+
+#+NAME: relaxation_run_v42
+#+BEGIN_SRC bash 
+
+# check if env var PISM_DO was set (i.e. PISM_DO=echo for a 'dry' run)
+if [ -n "${PISM_DO:+1}" ] ; then  
+  echo "$SCRIPTNAME         PISM_DO = $PISM_DO  (already set)"
+else
+  PISM_DO="" 
+fi
+PROJ_LIB=/usr/share/proj
+PISM_ONESTATION=pism_one_station_tas_cold_noleap-with-bounds.nc
+PISM_DATANAME=force_to_thickness_v2_ftt.nc
+
+
+regridcommand="-regrid_file $BCFILE -regrid_vars basal_melt_rate_grounded,tillwat,enthalpy,litho_temp"
+
+CLIMATE="-atmosphere one_station,elevation_change \
+		     -atmosphere.one_station.file $PISM_ONESTATION \
+		     -atmosphere.elevation_change.file $BOOT \
+		     -atmosphere.elevation_change.temperature_lapse_rate $dT \
+		     -atmosphere.elevation_change.precip_adjustment shift \
+		     -atmosphere.elevation_change.precipitation.lapse_rate $dPdz \
+		     -surface pdd,forcing \
+		     -force_to_thickness_file $PISM_DATANAME \
+		     -surface.pdd.std_dev.value ${temp_sd} \
+		     -sea_level constant "
+
+PHYS="-pik \
+      -sia_e ${E} \
+      -stress_balance ssa+sia \
+      -topg_to_phi 15.0,40.0,-300.0,700.0 \
+      -till_effective_fraction_overburden 0.02 \
+      -pseudo_plastic -pseudo_plastic_q 0.25 \
+      -tauc_slippery_grounding_lines \
+      -calving float_kill \
+      -calving.float_kill.margin_only false \
+      -calving.float_kill.calve_near_grounding_line false "
+
+NN=24
+firstnode=0
+lastnode=24
+
+
+RUNSTART=1778
+RUNEND=1896
+
+
+
+xmin=80793.
+ymin=-2650282.
+xmax=388422.
+ymax=-2226046.
+
+# Set paralell run options
+PISM="taskset -c ${firstnode}-${lastnode} pismr -regional"
+
+cmd="mpiexec -n $NN $PISM -i $BOOT \
+    $PHYS \
+    -regional.zero_gradient true \ 
+    -stress_balance.sia.max_diffusivity 500000 \  
+    -extra_file ex_${OUTFILENAME}.nc -extra_times $RUNSTART:$EXDT:$RUNEND \
+    -extra_vars $EXVARS \
+    -ts_file ts_${OUTFILENAME}.nc -ts_times $RUNSTART:$TSTIME:$RUNEND \
+    $CLIMATE -ys $RUNSTART -ye $RUNEND -o ${OUTFILENAME}.nc"
+$PISM_DO $cmd
+
+
+
+  #+END_SRC
+
+
+
+
+
+
+*** control/experiments precip scale
+
+**** control runs after a number of relaxations
+#+BEGIN_SRC bash :tangle scripts/control_1st_relax_E3_v4.2.sh
+#!/bin/bash
+E=3
+dT=-6.5
+temp_sd=1.8
+dT_precip=-6.5
+BOOT=relax_1st_cycle_calvingNG_false_calvingM_false_E3_v4.2.nc
+EXDT=1
+TSTIME=yearly
+EXVARS='thk,velsurf_mag,surface_melt_rate,surface_runoff_rate'
+OUTFILENAME=control_1st_relax_E${E}_v4.2
+<<control_run_v42>>
+#+END_SRC
+
+#+BEGIN_SRC bash :tangle scripts/control_2nd_relax_E3_v4.2.sh
+#!/bin/bash
+E=3
+dT=-6.5
+temp_sd=1.8
+dT_precip=-6.5
+BOOT=relax_2nd_cycle_E${E}_v4.2.nc
+EXDT=1
+TSTIME=yearly
+EXVARS='thk,velsurf_mag,surface_melt_rate,surface_runoff_rate'
+OUTFILENAME=control_2nd_relax_E${E}_v4.2
+<<control_run_v42>>
+#+END_SRC
+
+#+BEGIN_SRC bash :tangle scripts/control_3rd_relax_E3_v4.2.sh
+#!/bin/bash
+E=3
+dT=-6.5
+temp_sd=1.8
+dT_precip=-6.5
+BOOT=relax_3rd_cycle_E${E}_v4.2.nc
+EXDT=1
+TSTIME=yearly
+EXVARS='thk,velsurf_mag,surface_melt_rate,surface_runoff_rate'
+OUTFILENAME=control_3rd_relax_E${E}_v4.2
+<<control_run_v42>>
+#+END_SRC
+
+#+BEGIN_SRC bash :tangle scripts/control_4th_relax_E3_v4.2.sh
+#!/bin/bash
+E=3
+dT=-6.5
+temp_sd=1.8
+dT_precip=-6.5
+BOOT=relax_4th_cycle_E${E}_v4.2.nc
+EXDT=1
+TSTIME=yearly
+EXVARS='thk,velsurf_mag,surface_melt_rate,surface_runoff_rate'
+OUTFILENAME=control_4th_relax_E${E}_v4.2
+<<control_run_v42>>
+#+END_SRC
+
+#+BEGIN_SRC bash :tangle scripts/control_5th_relax_E3_v4.2.sh
+#!/bin/bash
+E=3
+dT=-6.5
+temp_sd=1.8
+dT_precip=-6.5
+BOOT=relax_5th_cycle_E${E}_v4.2.nc
+EXDT=1
+TSTIME=yearly
+EXVARS='thk,velsurf_mag,surface_melt_rate,surface_runoff_rate'
+OUTFILENAME=control_5th_relax_E${E}_v4.2
+<<control_run_v42>>
+#+END_SRC
+
+#+BEGIN_SRC bash :tangle scripts/control_6th_relax_E3_v4.2.sh
+#!/bin/bash
+E=3
+dT=-6.5
+temp_sd=1.8
+dT_precip=-6.5
+BOOT=relax_6th_cycle_E${E}_v4.2.nc
+EXDT=1
+TSTIME=yearly
+EXVARS='thk,velsurf_mag,surface_melt_rate,surface_runoff_rate'
+OUTFILENAME=control_6th_relax_E${E}_v4.2
+<<control_run_v42>>
+#+END_SRC
+
+#+BEGIN_SRC bash :tangle scripts/control_7th_relax_E3_v4.2.sh
+#!/bin/bash
+E=3
+dT=-6.5
+temp_sd=1.8
+dT_precip=-6.5
+BOOT=relax_7th_cycle_E${E}_v4.2.nc
+EXDT=1
+TSTIME=yearly
+EXVARS='thk,velsurf_mag,surface_melt_rate,surface_runoff_rate'
+OUTFILENAME=control_7th_relax_E${E}_v4.2
+<<control_run_v42>>
+#+END_SRC
+
+#+BEGIN_SRC bash :tangle scripts/control_8th_relax_E3_v4.2.sh
+#!/bin/bash
+E=3
+dT=-6.5
+temp_sd=1.8
+dT_precip=-6.5
+BOOT=relax_8th_cycle_E${E}_v4.2.nc
+EXDT=1
+TSTIME=yearly
+EXVARS='thk,velsurf_mag,surface_melt_rate,surface_runoff_rate'
+OUTFILENAME=control_8th_relax_E${E}_v4.2
+<<control_run_v42>>
+#+END_SRC
+
+#+BEGIN_SRC bash :tangle scripts/control_9th_relax_E3_v4.2.sh
+#!/bin/bash
+E=3
+dT=-6.5
+temp_sd=1.8
+dT_precip=-6.5
+BOOT=relax_9th_cycle_E${E}_v4.2.nc
+EXDT=1
+TSTIME=yearly
+EXVARS='thk,velsurf_mag,surface_melt_rate,surface_runoff_rate'
+OUTFILENAME=control_9th_relax_E${E}_v4.2
+<<control_run_v42>>
+#+END_SRC
+
+#+BEGIN_SRC bash :tangle scripts/control_10th_relax_E3_v4.2.sh
+#!/bin/bash
+E=3
+dT=-6.5
+temp_sd=1.8
+dT_precip=-6.5
+BOOT=relax_10th_cycle_E${E}_v4.2.nc
+EXDT=1
+TSTIME=yearly
+EXVARS='thk,velsurf_mag,surface_melt_rate,surface_runoff_rate'
+OUTFILENAME=control_10th_relax_E${E}_v4.2
+<<control_run_v42>>
+#+END_SRC
+
+#+BEGIN_SRC bash :tangle scripts/control_11th_relax_E3_v4.2.sh
+#!/bin/bash
+E=3
+dT=-6.5
+temp_sd=1.8
+dT_precip=-6.5
+BOOT=relax_11th_cycle_E${E}_v4.2.nc
+EXDT=1
+TSTIME=yearly
+EXVARS='thk,velsurf_mag,surface_melt_rate,surface_runoff_rate'
+OUTFILENAME=control_11th_relax_E${E}_v4.2
+<<control_run_v42>>
+#+END_SRC
+
+**** Main script 
+
+#+NAME: control_run_v42
+#+BEGIN_SRC bash 
+
+# check if env var PISM_DO was set (i.e. PISM_DO=echo for a 'dry' run)
+if [ -n "${PISM_DO:+1}" ] ; then  
+  echo "$SCRIPTNAME         PISM_DO = $PISM_DO  (already set)"
+else
+  PISM_DO="" 
+fi
+PROJ_LIB=/usr/share/proj
+PISM_DATANAME=force_to_thickness_v2_ftt.nc
+PISM_ONESTATION=pism_one_station_dmi_tas_noleap-with-bounds.nc
+
+
+regridcommand="-regrid_file $BCFILE -regrid_vars basal_melt_rate_grounded,tillwat,enthalpy,litho_temp"
+
+
+# Set model options
+#EXVARS='thk,velsurf_mag,diffusivity,bmelt'
+
+
+CLIMATE="-atmosphere one_station,elevation_change \
+		     -atmosphere.one_station.file $PISM_ONESTATION \
+		     -atmosphere.elevation_change.file $BOOT \
+		     -atmosphere.elevation_change.temperature_lapse_rate $dT \
+		     -atmosphere.elevation_change.precip_adjustment scale \
+		     -atmosphere.elevation_change.precipitation.temp_lapse_rate $dT_precip \
+		     -surface pdd,forcing \
+		     -force_to_thickness_file $PISM_DATANAME \
+		     -surface.pdd.std_dev.value ${temp_sd} \
+		     -sea_level constant "
+
+PHYS="-pik -sia_e ${E} -stress_balance ssa+sia -topg_to_phi 15.0,40.0,-300.0,700.0 -till_effective_fraction_overburden 0.02 -pseudo_plastic -pseudo_plastic_q 0.25 -tauc_slippery_grounding_lines -calving float_kill -calving.float_kill.margin_only false -calving.float_kill.calve_near_grounding_line false "
+
+
+NN=24
+firstnode=0
+lastnode=24
+
+RUNSTART=1896
+RUNEND=2023
+
+xmin=80793.
+ymin=-2650282.
+xmax=388422.
+ymax=-2226046.
+
+
+# Set paralell run options
+PISM="taskset -c ${firstnode}-${lastnode} pismr -regional"
+
+cmd="mpiexec -n $NN $PISM -i $BOOT \
+    $PHYS \
+    -regional.zero_gradient true \ 
+    -stress_balance.sia.max_diffusivity 500000 \  
+    -extra_file ex_${OUTFILENAME}.nc -extra_times $RUNSTART:$EXDT:$RUNEND \
+    -extra_vars $EXVARS \
+    -ts_file ts_${OUTFILENAME}.nc -ts_times $RUNSTART:$TSTIME:$RUNEND \
+    $CLIMATE -ys $RUNSTART -ye $RUNEND -o ${OUTFILENAME}.nc"
+$PISM_DO $cmd
+
+
+
+  #+END_SRC
+
+
+
+
+* Extract data 
+
+** Read flux from gate
+
+#+begin_src python
+import os
+import pandas as pd
+import xarray as xr
+import matplotlib.pyplot as plt
+import numpy as np
+
+# Reference points along a centerline or profile
+x = [303960]*10
+y = [-2581603,-2574506, -2580550, -2579525, -2578559,
+     -2577549, -2576553, -2575630, -2574591, -2573610]
+
+number_of_rows = 1  # Adjust if profile is wider than 1 row
+res = 1000  # meters
+
+# Model list
+models = [
+    "relax_1st_cycle_E3_v4.21",
+    "relax_2nd_cycle_E3_v4.21",
+    "relax_3rd_cycle_E3_v4.21",
+    "relax_4th_cycle_E3_v4.21",
+    "relax_5th_cycle_E3_v4.21",
+    "relax_6th_cycle_E3_v4.21",
+    "relax_7th_cycle_E3_v4.21",
+    "relax_8th_cycle_E3_v4.21",
+    "relax_9th_cycle_E3_v4.21",
+    "relax_10th_cycle_E3_v4.21",
+    "relax_11th_cycle_E3_v4.21"
+    ]
+
+#    "control_1st_relax_E3_v4.21",
+#    "control_2nd_relax_E3_v4.21",
+#    "control_3rd_relax_E3_v4.21",
+#    "control_4th_relax_E3_v4.21",
+#    "control_5th_relax_E3_v4.21",
+#    "control_6th_relax_E3_v4.21",
+#    "control_7th_relax_E3_v4.21",
+#    "control_8th_relax_E3_v4.21",
+#    "control_9th_relax_E3_v4.21"
+#]
+
+models = ["control_10th_relax_E3_v4.21"]
+
+# Output folders
+os.makedirs('csvs/flux_profiles', exist_ok=True)
+os.makedirs('figures/flux_profiles', exist_ok=True)
+
+for model in models:
+    print(f"Processing {model}...")
+
+    try:
+        # --- Load model output from .nc file ---
+        modeldir = f'model_output/ex_{model}.nc'
+        with xr.open_dataset(modeldir) as DS:
+            nt, nx = len(DS.time), len(x)
+            vel = np.zeros((nt, nx))
+            thk = np.zeros_like(vel)
+            flux = np.zeros_like(vel)
+
+            for i in range(nx):
+                xval, yval = x[i], y[i]
+                vel[:, i] = DS.velsurf_mag.sel(x=xval, y=yval, method='nearest')
+                thk[:, i] = DS.thk.sel(x=xval, y=yval, method='nearest')
+                flux[:, i] = vel[:, i] * thk[:, i] * res  # m²/year * m = m³/year
+
+            year = [t.year for t in DS.time.values]
+
+        # Convert to DataFrames with year as index
+        vel_df = pd.DataFrame(vel, index=year)
+        thk_df = pd.DataFrame(thk, index=year)
+        flux_df = pd.DataFrame(flux, index=year)
+
+        # Total flux per year in Gt/year
+        flux_total = pd.DataFrame({
+            'flux': flux_df.sum(axis=1) * 1e-9 / number_of_rows  # Gt/year
+        })
+
+        vel_mean = vel_df.mean(axis=1)
+        thk_mean = thk_df.mean(axis=1)
+
+        # --- Load bedrock elevation from base model file ---
+        with xr.open_dataset(f'model_output/{model}.nc') as ds:
+            topg = [ds.topg.sel(x=x[i], y=y[i], method='nearest').item() for i in range(len(x))]
+
+        bed_df = pd.DataFrame(topg, columns=['topg'])
+        surf_df = pd.DataFrame(thk_df.values + topg, index=thk_df.index, columns=thk_df.columns)
+
+        # --- Plot ---
+        fig, ax = plt.subplots(2, 2, figsize=(10, 8))
+
+        flux_total.plot(ax=ax[0, 0], legend=False)
+        ax[0, 0].set_ylabel('Flux (Gt/year)')
+
+        vel_df.T.plot(ax=ax[0, 1], legend=False, cmap='viridis')
+        vel_df.T.iloc[:, -1].plot(ax=ax[0, 1], linewidth=2, color='black')
+        vel_df.T.iloc[:, 0].plot(ax=ax[0, 1], linewidth=2, color='gray')
+        ax[0, 1].set_ylabel('Velocity (m/year)')
+
+        thk_df.T.plot(ax=ax[1, 0], legend=False)
+        ax[1, 0].set_ylabel('Thickness (m)')
+
+        surf_df.T.plot(ax=ax[1, 1], legend=False)
+        bed_df.plot(ax=ax[1, 1], legend=False)
+        ax[1, 1].set_ylabel('Elevation (m a.s.l.)')
+
+        fig.suptitle(model)
+        fig.tight_layout()
+
+        fig.savefig(f'figures/flux_profiles/{model}.png', dpi=100)
+        plt.close()
+
+        # --- Save data ---
+        flux_total.to_csv(f'csvs/flux_profiles/flux_{model}.csv')
+        vel_mean.to_csv(f'csvs/flux_profiles/vel_{model}.csv')
+        thk_mean.to_csv(f'csvs/flux_profiles/thk_{model}.csv')
+
+    except Exception as e:
+        print(f"⚠️ Skipping {model} due to error: {e}")
+
+#+end_src
+
+#+RESULTS:
+: None
+
+
+
+** Read profiles of vel and thk 
+This is just like the fluxgate, but just extracting ice thickness along the center flowline, looking at where on the distance axis this goes to zero.
+
+#+begin_src python
+import os
+import geopandas as gpd
+import pandas as pd
+import xarray as xr
+import matplotlib.pyplot as plt
+import numpy as np
+
+# Load shapefile with centerline points (assumes 100 m spacing)
+gdf = gpd.read_file('data/shp/centerline_north_points100m.shp')
+
+# Model folder
+folder = 'model_output/'
+res = 100  # meter resolution
+
+# List of models to process
+models = [
+    "relax_1st_cycle_calvingNG_false_calvingM_false_E3_v4.2",
+    "relax_2nd_cycle_E3_v4.2",
+    "relax_3rd_cycle_E3_v4.2",
+    "relax_4th_cycle_E3_v4.2",
+    "relax_5th_cycle_E3_v4.2",
+    "relax_6th_cycle_E3_v4.2",
+    "relax_7th_cycle_E3_v4.2",
+    "relax_8th_cycle_E3_v4.2",
+    "relax_9th_cycle_E3_v4.2",
+    "relax_10th_cycle_E3_v4.2",
+    "relax_11th_cycle_E3_v4.2",
+    "control_1st_relax_E3_v4.2",
+    "control_2nd_relax_E3_v4.2",
+    "control_3rd_relax_E3_v4.2",
+    "control_4th_relax_E3_v4.2",
+    "control_5th_relax_E3_v4.2",
+    "control_6th_relax_E3_v4.2",
+    "control_7th_relax_E3_v4.2",
+    "control_8th_relax_E3_v4.2",
+    "control_9th_relax_E3_v4.2"
+]
+
+# Create output directories if needed
+os.makedirs('figures/centerline_profiles', exist_ok=True)
+os.makedirs('csvs/centerline_profiles', exist_ok=True)
+
+# Loop through each model
+for model in models:
+    print(f"Processing: {model}")
+    try:
+        # --- Load timeseries model output ---
+        with xr.open_dataset(f'{folder}ex_{model}.nc') as DS:
+            nt, npts = len(DS.time), len(gdf)
+            vel = np.zeros((nt, npts))
+            thk = np.zeros_like(vel)
+
+            for i in range(npts):
+                xval, yval = gdf.geometry.x[i], gdf.geometry.y[i]
+                vel[:, i] = DS.velsurf_mag.sel(x=xval, y=yval, method='nearest')
+                thk[:, i] = DS.thk.sel(x=xval, y=yval, method='nearest')
+
+            year = [t.year for t in DS.time.values]
+            vel_df = pd.DataFrame(vel, index=year)
+            thk_df = pd.DataFrame(thk, index=year)
+
+        # --- Load bedrock elevation (topg) ---
+        with xr.open_dataset(f'{folder}{model}.nc') as ds:
+            topg = np.zeros(npts)
+            for i in range(npts):
+                xval, yval = gdf.geometry.x[i], gdf.geometry.y[i]
+                topg[i] = ds.topg.sel(x=xval, y=yval, method='nearest')
+
+        bed_df = pd.DataFrame(topg, columns=['topg'])
+        surf_df = pd.DataFrame(thk_df.values + topg, index=thk_df.index, columns=thk_df.columns)
+
+        # --- Plot velocity & thickness ---
+        fig, ax = plt.subplots(2, 1, figsize=(10, 8), sharex=True)
+        vel_df.T.plot(ax=ax[0], legend=False)
+        ax[0].set_ylabel('Velocity (m/year)')
+        ax[0].set_xlim(100, 400)  # Adjust as needed
+
+        thk_df.T.plot(ax=ax[1], legend=False)
+        ax[1].set_ylabel('Thickness (m)')
+        ax[1].set_xlim(100, 400)
+
+        fig.suptitle(f"Centerline Profile: {model}")
+        fig.tight_layout()
+
+        fig.savefig(f'figures/centerline_profiles/{model}.png', dpi=100)
+        plt.close()
+
+        # --- Save data to CSV ---
+        vel_df.to_csv(f'csvs/centerline_profiles/centerline_vel_{model}.csv')
+        thk_df.to_csv(f'csvs/centerline_profiles/centerline_thk_{model}.csv')
+        bed_df.to_csv('csvs/centerline_profiles/centerline_topg.csv', index=True)  # Only once needed ideally
+
+    except Exception as e:
+        print(f"⚠️ Skipping {model} due to error: {e}")
+
+#+end_src
+
+#+RESULTS:
+: None
+
+** Read profiles of vel and thk of final model outputs
+This is just like the fluxgate, but just extracting ice thickness along the center flowline, looking at where on the distance axis this goes to zero.
+
+#+begin_src python
+import os
+import geopandas as gpd
+import pandas as pd
+import xarray as xr
+import matplotlib.pyplot as plt
+import numpy as np
+
+# Load shapefile with centerline points (assumes 100 m spacing)
+gdf = gpd.read_file('data/shp/centerline_north_points100m.shp')
+
+# Model folder
+folder = 'model_output/'
+res = 100  # meter resolution
+
+# List of models to process
+models = [
+    "relax_1st_cycle_calvingNG_false_calvingM_false_E3_v4.2",
+    "relax_2nd_cycle_E3_v4.2",
+    "relax_3rd_cycle_E3_v4.2",
+    "relax_4th_cycle_E3_v4.2",
+    "relax_5th_cycle_E3_v4.2",
+    "relax_6th_cycle_E3_v4.2",
+    "relax_7th_cycle_E3_v4.2",
+    "relax_8th_cycle_E3_v4.2",
+    "relax_9th_cycle_E3_v4.2",
+    "relax_10th_cycle_E3_v4.2",
+    "relax_11th_cycle_E3_v4.2",
+    "control_1st_relax_E3_v4.2",
+    "control_2nd_relax_E3_v4.2",
+    "control_3rd_relax_E3_v4.2",
+    "control_4th_relax_E3_v4.2",
+    "control_5th_relax_E3_v4.2",
+    "control_6th_relax_E3_v4.2",
+    "control_7th_relax_E3_v4.2",
+    "control_8th_relax_E3_v4.2",
+    "control_9th_relax_E3_v4.2"
+]
+
+
+# Create output directories if needed
+os.makedirs('figures/centerline_profiles', exist_ok=True)
+os.makedirs('csvs/centerline_profiles', exist_ok=True)
+
+# Loop through each model
+for model in models:
+    print(f"Processing: {model}")
+    try:
+        # --- Load timeseries model output ---
+        with xr.open_dataset(f'{folder}{model}.nc') as DS:
+            npts = len(gdf)
+            vel = np.zeros((npts))
+            thk = np.zeros_like(vel)
+
+            for i in range(npts):
+                xval, yval = gdf.geometry.x[i], gdf.geometry.y[i]
+                vel[i] = DS.velsurf_mag.sel(x=xval, y=yval, method='nearest')
+                thk[i] = DS.thk.sel(x=xval, y=yval, method='nearest')
+
+           
+        df = pd.DataFrame({'vel':vel, 'thk':thk})
+     
+
+        # --- Save data to CSV ---
+        df.to_csv(f'csvs/centerline_profiles/final_centerline_vel_and_thk_{model}.csv')
+
+
+
+    except Exception as e:
+        print(f"⚠️ Skipping {model} due to error: {e}")
+
+#+end_src
+
+#+RESULTS:
+: None
+
+
+** Calving front position
+
+#+begin_src python
+import os
+import pandas as pd
+import matplotlib.pyplot as plt
+import numpy as np
+
+# List of model names
+models = [
+    "relax_1st_cycle_calvingNG_false_calvingM_false_E3_v4.2",
+    "relax_2nd_cycle_E3_v4.2",
+    "relax_3rd_cycle_E3_v4.2",
+    "relax_4th_cycle_E3_v4.2",
+    "relax_5th_cycle_E3_v4.2",
+    "relax_6th_cycle_E3_v4.2",
+    "relax_7th_cycle_E3_v4.2",
+    "relax_8th_cycle_E3_v4.2",
+    "relax_9th_cycle_E3_v4.2",
+    "relax_10th_cycle_E3_v4.2",
+    "relax_11th_cycle_E3_v4.2",
+    "control_1st_relax_E3_v4.2",
+    "control_2nd_relax_E3_v4.2",
+    "control_3rd_relax_E3_v4.2",
+    "control_4th_relax_E3_v4.2",
+    "control_5th_relax_E3_v4.2",
+    "control_6th_relax_E3_v4.2",
+    "control_7th_relax_E3_v4.2",
+    "control_8th_relax_E3_v4.2",
+    "control_9th_relax_E3_v4.2"
+]
+# Ensure output folders exist
+os.makedirs('figures/calving_front_position', exist_ok=True)
+os.makedirs('csvs/calving_front_position', exist_ok=True)
+
+# Loop through all models
+for model in models:
+    print(f"Processing {model}...")
+
+    try:
+        # Load data
+        vel = pd.read_csv(f'csvs/centerline_profiles/centerline_vel_{model}.csv', index_col=0)
+        thk = pd.read_csv(f'csvs/centerline_profiles/centerline_thk_{model}.csv', index_col=0)
+        flux_model = pd.read_csv(f'csvs/flux_profiles/flux_{model}.csv', index_col=0, parse_dates=True)
+
+        # Find first non-zero thickness location
+        first_non_zero_column = thk.apply(
+            lambda row: row.gt(0).idxmax() if row.gt(0).any() else np.nan, axis=1
+        )
+
+        # Convert to float and multiply by 100 (distance along centerline)
+        result_df = pd.DataFrame(
+            first_non_zero_column.astype(float) * 100,
+            columns=['Calving front distance to arbitrary reference']
+        )
+
+        # Save CSV
+        result_df.to_csv(f'csvs/calving_front_position/calvingfront_position_{model}.csv')
+
+        # Plot
+        fig, ax = plt.subplots(figsize=(8, 4))
+        result_df.plot(ax=ax)
+        ax.set_title(f"Calving Front Position - {model}")
+        ax.set_ylabel("Distance (m)")
+        ax.set_xlabel("Year")
+
+        fig.tight_layout()
+        fig.savefig(f'figures/calving_front_position/{model}.png', dpi=100)
+        plt.close()
+
+    except Exception as e:
+        print(f"⚠️ Failed to process {model}: {e}")
+
+
+#+end_src
+
+#+RESULTS:
+: None
+
+
+
+
+** Extract observed centerline velocity and thickness present day
+
+#+begin_src python
+import os
+import geopandas as gpd
+import pandas as pd
+import xarray as xr
+import matplotlib.pyplot as plt
+import numpy as np
+
+gdf = gpd.read_file('shp/centerline_north_points100m.shp')
+
+
+
+# --- Load timeseries model output ---
+with xr.open_dataset('data/promice/Avg_Timeseries_rotr_159_251.nc') as DS:
+    npts = len(gdf)
+    vel = np.zeros((npts))
+
+
+    for i in range(npts):
+        xval, yval = gdf.geometry.x[i], gdf.geometry.y[i]
+        vel[i] = DS.land_ice_surface_velocity_magnitude.sel(x=xval, y=yval, method='nearest')
+
+    
+
+
+with xr.open_dataset('model_input/pism_greenland_1km_v3-filled.nc') as DS:
+    npts = len(gdf)
+    thk = np.zeros((npts))
+    bed = np.zeros((npts))
+
+
+    for i in range(npts):
+        xval, yval = gdf.geometry.x[i], gdf.geometry.y[i]
+        thk[i] = DS.thk.sel(x=xval, y=yval, method='nearest')
+        bed[i] = DS.topg.sel(x=xval, y=yval, method='nearest')
+
+    thk_df = pd.DataFrame(thk, columns=['thk'])
+    bed_df = pd.DataFrame(bed, columns=['topg'])
+
+df = pd.DataFrame({'vel':vel, 'thk':thk, 'bed':bed })
+
+df.to_csv(f'csvs/centerline_profiles/observed_geometry_and_velocity.csv', index = False)
+
+
+
+
+#+end_src
+
+#+RESULTS:
+: None
+
+** extract observed centerline velocity in 1987 (MEaSUREs)
+
+
+First I need to calculate the velocity magnityde
+#+begin_src python
+import rasterio
+import numpy as np
+import xarray as xr
+from affine import Affine
+
+# File names
+vx_file = "data/MEaSUREs/OPT_E66.50N_1985-03_vx_v03.0.tif"
+vy_file = "data/MEaSUREs/OPT_E66.50N_1985-03_vy_v03.0.tif"
+ex_file = "data/MEaSUREs/OPT_E66.50N_1985-03_ex_v03.0.tif"
+ey_file = "data/MEaSUREs/OPT_E66.50N_1985-03_ey_v03.0.tif"
+
+# Read raster data
+with rasterio.open(vx_file) as src_vx:
+    vx = src_vx.read(1)
+    vx[vx == -99999] = np.nan  # Replace -9999 with NaN
+    transform = src_vx.transform
+    crs = src_vx.crs
+    width = src_vx.width
+    height = src_vx.height
+
+with rasterio.open(vy_file) as src_vy:
+    vy = src_vy.read(1)
+    vy[vy == -99999] = np.nan  # Replace -9999 with NaN
+
+with rasterio.open(ex_file) as src_ex:
+    ex = src_ex.read(1)
+    ex[ex == -99999] = np.nan  # Replace -9999 with NaN
+
+with rasterio.open(ey_file) as src_ey:
+    ey = src_ey.read(1)
+    ey[ey == -99999] = np.nan  # Replace -9999 with NaN
+
+# Calculate velocity magnitude
+velocity_magnitude = np.sqrt(vx**2 + vy**2)
+
+# Estimate standard deviation (combined from ex and ey)
+std = np.sqrt(ex**2 + ey**2)
+
+
+# Build x/y coordinate arrays (pixel centers)
+x = np.arange(width) * transform.a + transform.a / 2 + transform.c
+y = np.arange(height) * transform.e + transform.e / 2 + transform.f
+
+# Flip y and data if north-up (e < 0)
+if transform.e < 0:
+    y = y[::-1]  # flip y coordinates
+    vx = np.flipud(vx)
+    vy = np.flipud(vy)
+    std = np.flipud(std)
+    velocity_magnitude = np.flipud(velocity_magnitude)
+
+
+
+# Create xarray Dataset
+ds = xr.Dataset(
+    {
+        "vx": (("y", "x"), vx),
+        "vy": (("y", "x"), vy),
+        "std": (("y", "x"), std),
+        "velocity_magnitude": (("y", "x"), velocity_magnitude),
+    },
+    coords={
+        "x": x,
+        "y": y,
+    },
+    attrs={
+        "crs": "EPSG:3413",
+        "description": "Velocity data including vx, vy, std, and velocity magnitude"
+    }
+)
+
+
+
+
+# Add grid_mapping to each variable
+for var in ["vx", "vy", "std", "velocity_magnitude"]:
+    ds[var].attrs["grid_mapping"] = "crs"
+
+
+
+gdf = gpd.read_file('data/shp/centerline_north_points100m.shp')
+
+npts = len(gdf)
+vel = np.zeros((npts))
+
+for i in range(npts):
+    xval, yval = gdf.geometry.x[i], gdf.geometry.y[i]
+    vel[i] = ds.velocity_magnitude.sel(x=xval, y=yval, method='nearest')
+
+df = pd.DataFrame({'vel':vel})
+
+df.to_csv(f'csvs/centerline_profiles/observed_velocity_1985.csv', index = False)
+
+# Save as NetCDF
+ds.to_netcdf("data/MEaSUREs/velocity_data_1985-03.nc")
+
+print("NetCDF file saved as velocity_data_1985-03.nc")
+#+end_src
+
+#+RESULTS:
+: None
+
+
+
+
+
+
+** extract AERODEM elevation
+First I need to calculate the velocity magnitude
+#+begin_src python
+import rasterio
+import numpy as np
+import xarray as xr
+from affine import Affine
+
+# File names
+dem = "/home/mdrev/data/aerodem/Helheim_epsg3413.tiff"
+
+
+# Read raster data
+with rasterio.open(dem) as src:
+    dem = src.read(1)
+    dem[dem > 5000] = np.nan  # Replace  with NaN
+    dem[dem < -100] = np.nan  # Replace  with NaN
+    transform = src.transform
+    crs = src.crs
+    width = src.width
+    height = src.height
+
+
+# Build x/y coordinate arrays (pixel centers)
+x = np.arange(width) * transform.a + transform.a / 2 + transform.c
+y = np.arange(height) * transform.e + transform.e / 2 + transform.f
+
+# Flip y and data if north-up (e < 0)
+if transform.e < 0:
+    y = y[::-1]  # flip y coordinates
+    dem = np.flipud(dem)
+
+
+# Create xarray Dataset
+ds = xr.Dataset(
+    {
+        "aerodem": (("y", "x"), dem)
+    },
+    coords={
+        "x": x,
+        "y": y,
+    },
+    attrs={
+        "crs": src.crs,
+        "description": "AERODEM 1981"
+    }
+)
+
+# Add grid_mapping to each variable
+for var in ["aerodem"]:
+    ds[var].attrs["grid_mapping"] = "crs"
+
+gdf = gpd.read_file('data/shp/centerline_north_points100m.shp')
+
+npts = len(gdf)
+dem = np.zeros((npts))
+
+for i in range(npts):
+    xval, yval = gdf.geometry.x[i], gdf.geometry.y[i]
+    dem[i] = ds.aerodem.sel(x=xval, y=yval, method='nearest')
+
+df = pd.DataFrame({'aerodem':dem})
+
+df.to_csv(f'csvs/centerline_profiles/aerodem_1981.csv', index = False)
+
+
+
+print("Done")
+#+end_src
+
+#+RESULTS:
+: None
+
+
+** extract observed centerline velocity from ESA CCI 
+
+#+begin_src python
+import os
+import geopandas as gpd
+import pandas as pd
+import xarray as xr
+import matplotlib.pyplot as plt
+import numpy as np
+
+# Load shapefile with centerline points (assumes 100 m spacing)
+gdf = gpd.read_file('shp/centerline_north_points100m.shp')
+
+# Model folder
+folder = 'model_output/'
+res = 100  # meter resolution
+
+
+with xr.open_dataset('data/ESA_CCI/Helheim_timeseries_ESA_ver2.nc' ) as DS:
+    nt, npts = len(DS.time), len(gdf)
+    vel = np.zeros((nt, npts))
+    thk = np.zeros_like(vel)
+
+    for i in range(npts):
+        xval, yval = gdf.geometry.x[i], gdf.geometry.y[i]
+        vel[:, i] = DS.land_ice_surface_velocity_magnitude.sel(x=xval, y=yval, method='nearest')
+    year = pd.to_datetime(DS.time.values)
+
+    vel_df = pd.DataFrame(vel, index=year)
+
+
+
+vel_df.to_csv(f'csvs/centerline_profiles/centerline_vel_ESA_CCI.csv')
+
+
+
+
+#+end_src
+
+#+RESULTS:
+: None
+
+** Extract observed centerline velocity and thickness present day
+
+#+begin_src python
+import os
+import geopandas as gpd
+import pandas as pd
+import xarray as xr
+import matplotlib.pyplot as plt
+import numpy as np
+
+gdf = gpd.read_file('shp/centerline_north_points100m.shp')
+
+
+
+# --- Load timeseries model output ---
+with xr.open_dataset('data/promice/Avg_Timeseries_rotr_159_251.nc') as DS:
+    npts = len(gdf)
+    vel = np.zeros((npts))
+
+
+    for i in range(npts):
+        xval, yval = gdf.geometry.x[i], gdf.geometry.y[i]
+        vel[i] = DS.land_ice_surface_velocity_magnitude.sel(x=xval, y=yval, method='nearest')
+
+    
+
+
+with xr.open_dataset('pism_files/pism_greenland_1km_v3-filled.nc') as DS:
+    npts = len(gdf)
+    thk = np.zeros((npts))
+    bed = np.zeros((npts))
+
+
+    for i in range(npts):
+        xval, yval = gdf.geometry.x[i], gdf.geometry.y[i]
+        thk[i] = DS.thk.sel(x=xval, y=yval, method='nearest')
+        bed[i] = DS.topg.sel(x=xval, y=yval, method='nearest')
+
+    thk_df = pd.DataFrame(thk, columns=['thk'])
+    bed_df = pd.DataFrame(bed, columns=['topg'])
+
+df = pd.DataFrame({'vel':vel, 'thk':thk, 'bed':bed })
+
+df.to_csv(f'csvs/centerline_profiles/observed_geometry_and_velocity.csv', index = False)
+
+
+
+
+#+end_src
+
+
+
+
+* Plots
+
+** Maps: start and end geometry
+
+Plotting end of relaxation which is also the start of the model run
+
+#+BEGIN_SRC python
+import numpy as np
+import xarray as xr
+import matplotlib.pyplot as plt
+import pandas as pd
+import rasterio
+import rasterio.plot
+
+#model = 'control_1st_relax_E3_v4.2'
+#model = 'control_2nd_relax_E3_v4.2'
+#model = 'control_3rd_relax_E3_v4.2'
+#model = 'control_4th_relax_E3_v4.2'
+#model = 'control_5th_relax_E3_v4.2'
+#model = 'control_6th_relax_E3_v4.2'
+#model = 'control_7th_relax_E3_v4.2'
+#model = 'control_8th_relax_E3_v4.2'
+#model = 'control_9th_relax_E3_v4.2'
+
+#model="relax_1st_cycle_calvingNG_false_calvingM_false_E3_v4.2"
+#model="relax_2nd_cycle_E3_v4.2"
+#model="relax_3rd_cycle_E3_v4.2"
+#model="relax_4th_cycle_E3_v4.2"
+#model="relax_5th_cycle_E3_v4.2"
+#model="relax_6th_cycle_E3_v4.2"
+#model="relax_7th_cycle_E3_v4.2"
+#model="relax_8th_cycle_E3_v4.2"
+#model="relax_9th_cycle_E3_v4.2"
+#model="relax_10th_cycle_E3_v4.2"
+#model="relax_11th_cycle_E3_v4.2"
+
+folder = 'model_output/'
+<<plot_thk_w_background>>
+#+END_SRC
+
+#+RESULTS:
+: None
+
+
+#+NAME: plot_thk_w_background
+#+BEGIN_SRC python
+file_path = folder+model+'.nc'
+fig, axs = plt.subplots(1, 1, figsize=(10, 6))
+
+with xr.open_dataset(file_path) as ds:
+
+    with rasterio.open('tiffs/helheim_background.tif') as helheim:
+        rasterio.plot.show(helheim.read(), ax = axs, transform = helheim.transform)
+
+    var_name = 'thk'
+    var_data = ds[var_name]
+    var_data = var_data.where(var_data >10, np.nan)
+
+    var_data.plot(ax=axs, alpha = 0.5)
+    axs.set_ylim(-2.6e6,-2.54e6)
+    axs.set_xlim(250000,350000)
+    #plt.show()
+plt.savefig('figures/maps/'+model + '.png')  
+    #+END_SRC
+
+
+
+
+** Time series
+*** Time series of data and forcing
+
+**** data load functions
+***** Load IRD data
+
+#+NAME: load_IRD
+#+BEGIN_SRC python
+import pandas as pd
+composite_raw =  pd.read_excel(open('data/dynahide_data/Sermilik Fjord data.xlsx', 'rb'),
+              sheet_name='Klimadata 1900-2008 AD')
+
+
+composite = pd.DataFrame({'year':composite_raw['Date'],'composite':composite_raw['Helheim Glacier IRD - reconstructed calving record (composite of ER13-11-07)']})
+composite.index = pd.to_datetime(composite['year'], format = '%Y')
+composite.index.name = 'datetime'
+composite = composite.drop('year', axis = 1)
+composite = composite.sort_values(by = ['datetime'])
+composite = composite.dropna()
+
+#+END_SRC
+
+***** Load pism forcing
+#+NAME: load_pism_forcing
+#+begin_src python :results output
+import xarray as xr
+import pandas as pd
+
+# Load in PISM forcing temperature
+pism = xr.load_dataset('model_input/forcing/pism_one_station_dmi_tas_noleap.nc')
+datetime_index = pd.to_datetime([str(t) for t in pism.time.values])
+temp = pism['air_temp'].to_dataframe()
+precip = pism['precipitation'].to_dataframe()
+temp.index = datetime_index
+precip.index = datetime_index
+
+
+pism = xr.load_dataset('model_input/forcing/pism_one_station_tas_cold_noleap.nc')
+datetime_index = pd.to_datetime([str(t) for t in pism.time.values])
+temp_cold = pism['air_temp'].to_dataframe()
+precip_cold = pism['precipitation'].to_dataframe()
+temp_cold.index = datetime_index
+precip_cold.index = datetime_index
+
+
+
+#+end_src
+
+**** Plot with all
+Temperature
+Precipitation
+Ice rafted debris
+Calving fronts
+Solid ice discharge
+
+***** Chat GPSs fancy version
+#+begin_src python :results output
+# --- Imports & helpers ---
+from pathlib import Path
+import xarray as xr
+import matplotlib as mpl
+import matplotlib.pyplot as plt
+import matplotlib.dates as mdates
+import pandas as pd
+<<load_IRD>> # composite
+<<load_pism_forcing>> # temp, precip
+def mm_to_in(mm): 
+    return mm/25.4
+
+# Publication defaults (double-column width ≈ 180 mm)
+def set_pub_defaults_double_column(height_mm=220, dpi=300, font_family="DejaVu Sans"):
+    mpl.rcParams.update({
+        "figure.figsize": (mm_to_in(180), mm_to_in(height_mm)),
+        "figure.dpi": dpi,
+        "savefig.dpi": dpi,
+        "savefig.bbox": "tight",
+        "font.family": font_family,
+        "font.size": 9,
+        "axes.titlesize": 10,
+        "axes.labelsize": 9,
+        "axes.spines.top": False,
+        "axes.spines.right": False,
+        "axes.linewidth": 0.7,
+        "xtick.labelsize": 8,
+        "ytick.labelsize": 8,
+        "xtick.major.size": 3,
+        "ytick.major.size": 3,
+        "xtick.major.width": 0.7,
+        "ytick.major.width": 0.7,
+        "lines.linewidth": 1.2,
+        "legend.fontsize": 8,
+        "legend.frameon": False,
+        "pdf.fonttype": 42,
+        "ps.fonttype": 42,
+    })
+
+# --- Load your data (as in your script) ---
+# <<load_IRD>>  -> composite (pd.Series, datetime index)
+# <<load_pism_forcing>> -> temp, precip (pd.Series with datetime index)
+
+# Annualize
+temp_ann = temp.resample('YE').mean() - 273.15  # °C
+# If precip is kg m^-2 s^-1, mm/yr = sum * seconds_per_year (1 kg m^-2 = 1 mm water)
+precip_ann = precip.resample('YE').sum() * (60*60*24*365) / 1000  # -> m/yr if kg/s over ??? 
+# NOTE: Above assumed unit; keep your original if you’re certain.
+
+autoterm = pd.read_csv('data/autoterm/Helheim.csv', index_col=1, parse_dates=True)['181']
+autoterm = (-autoterm).resample('YE').median() / 1000  # km (negated as in your code)
+
+ds = xr.open_dataset('data/solid_ice_discharge_obs/gate.nc')
+flux_obs = ds.sel(gate=227)['discharge'].to_pandas()
+flux_obs_ann = flux_obs.resample('YE').mean()
+
+# --- Figure ---
+set_pub_defaults_double_column(height_mm=220)  # adjust height_mm if you need more/less vertical room
+fig, axes = plt.subplots(5, 1, sharex=True, constrained_layout=False)
+
+axT, axP, axIRD, axCF, axSID = axes
+
+# Temperature
+axT.plot(temp_ann.index, temp_ann, label='Air temperature')
+axT.set_ylabel('°C')
+axT.legend(loc='upper left')
+axT.grid(True, alpha=0.3)
+
+# Precipitation
+axP.plot(precip_ann.index, precip_ann, label='Precipitation')
+axP.set_ylabel('mm/yr')
+axP.legend(loc='upper left')
+axP.grid(True, alpha=0.3)
+
+# IRD
+axIRD.plot(composite.index, composite, label='Ice-rafted debris')
+axIRD.set_ylabel('IRD (a.u.)')
+axIRD.legend(loc='upper left')
+axIRD.grid(True, alpha=0.3)
+
+# Calving front position (relative)
+axCF.scatter(autoterm.index, autoterm, s=10, label='Calving-front position')
+# Reference lines + labels (placed just outside axes using transform)
+for y, txt in [(0.0, '1940'), (-4.6, '1994'), (3.2, '2021')]:
+    axCF.axhline(y=y, linestyle='--', linewidth=1, alpha=0.5)
+    axCF.annotate(txt, xy=(1.0, y), xycoords=('axes fraction', 'data'),
+                  xytext=(5, 0), textcoords='offset points', va='center', fontsize=8, color='gray')
+axCF.set_ylabel('km (rel.)')
+axCF.legend(loc='upper left')
+axCF.grid(True, alpha=0.3)
+
+# Solid ice discharge
+axSID.plot(flux_obs_ann.index, flux_obs_ann, label='Observed ice flux')
+axSID.set_ylabel('Gt/yr')
+axSID.legend(loc='upper left')
+axSID.grid(True, alpha=0.3)
+
+# Panel labels
+panel_labels = ['(a)', '(b)', '(c)', '(d)', '(e)']
+for ax, label in zip(axes, panel_labels):
+    ax.text(-0.08, 1.02, label, transform=ax.transAxes,
+            fontsize=9, fontweight='bold', va='bottom', ha='left')
+# X-axis formatting: decades as majors, years as minors
+axSID.set_xlabel('Year')
+for ax in axes:
+    ax.xaxis.set_major_locator(mdates.YearLocator(10))   # every decade
+    ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y'))
+    ax.xaxis.set_minor_locator(mdates.YearLocator(1))
+
+# Align y-labels neatly
+fig.align_ylabels(axes)
+
+
+# Tight layout (after everything)
+fig.tight_layout()
+
+# Save
+outdir = Path('figures/paper')
+outdir.mkdir(parents=True, exist_ok=True)
+fig.savefig(outdir / 'observed_timeseries_doublecol.png')
+fig.savefig(outdir / 'observed_timeseries_doublecol.pdf')
+plt.close(fig)
+
+#+end_src
+
+#+RESULTS:
+***** 5 panels w. colors
+#+begin_src python :results output
+
+
+import xarray as xr
+import matplotlib.pyplot as plt
+import pandas as pd
+<<load_IRD>> # composite
+<<load_pism_forcing>> # temp, precip
+temp = temp.resample('YE').mean()-273.15
+precip = precip.resample('YE').sum()*(60*60*24*365)/1000 #unit is kg/s and this is converted to mm/year
+autoterm = pd.read_csv('data/autoterm/Helheim.csv', index_col = 1, parse_dates=True)
+autoterm = -autoterm['181'].resample('YE').median()
+autoterm = autoterm/1000
+ds = xr.open_dataset('data/solid_ice_discharge_obs/gate.nc')
+flux_obs = ds.sel(gate=227)['discharge'].to_pandas()
+flux_obs_annual = flux_obs.resample('YE').mean()
+
+
+fig, ax = plt.subplots(5,1, figsize = (8,17), sharex = True)
+axT = ax[0]
+axP = ax[1]
+axIRD = ax[2]
+axCF = ax[3]
+axSID = ax[4]
+
+ird_color = 'gray'
+flux_color = 'tab:cyan'
+autoterm_color = 'tab:olive'
+temp_color = 'tab:blue'
+precip_color = 'tab:orange'
+axT.plot(temp.index, temp, label = 'Air temperature', color = temp_color)
+axT.set_ylabel('$\circ$C')
+axT.legend(loc = 'upper left')
+axP.plot(precip.index, precip, label = 'Precipitation', color = precip_color)
+axP.set_ylabel('mm/yr')
+axP.legend(loc = 'upper left')
+axIRD.plot(composite.index, composite, label = 'Ice rafted debris', color = ird_color)
+axIRD.set_ylabel('IRD')
+axIRD.legend(loc = 'upper left')
+axCF.scatter(autoterm.index, autoterm, label = 'Calving front position',color = autoterm_color)
+axCF.axhline(y=0, color = 'gray', alpha = 0.5, linestyle='--', linewidth=1)
+axCF.axhline(y=-4.6, color = 'gray', alpha = 0.5, linestyle='--', linewidth=1)
+axCF.axhline(y=3.20, color = 'gray', alpha = 0.5, linestyle='--', linewidth=1)
+xlim = axCF.get_xlim()
+axCF.set_xlim(xlim[0], xlim[1] + 20)
+
+# Add year labels just outside the right edge
+axCF.text(xlim[1] + 40, 0, '1940', va='center', fontsize=9, color='gray')
+axCF.text(xlim[1] + 40, -4.6, '1994', va='center', fontsize=9, color='gray')
+axCF.text(xlim[1] + 40, 3.2, '2021', va='center', fontsize=9, color='gray')
+
+
+
+axCF.set_ylabel('m')
+axCF.legend(loc = 'upper left')
+axSID.plot(flux_obs_annual.index, flux_obs_annual, label = 'Observed ice flux', color = flux_color)
+axSID.set_ylabel('Gt/yr')
+axSID.legend(loc = 'upper left')
+plt.show()
+fig.savefig('figures/paper/obsererved_timeseries.png', dpi = 300)
+#+end_src
+
+#+RESULTS:
+: /tmp/babel-tgyfO8/python-hzfifu:62: SyntaxWarning: invalid escape sequence '\c'
+:   axT.set_ylabel('$\circ$C')
+
+
+
+
+
+***** 3 panels w. colors
+#+begin_src python :results output
+
+
+import xarray as xr
+import matplotlib.pyplot as plt
+import pandas as pd
+<<load_IRD>> # composite
+<<load_pism_forcing>> # temp, precip
+temp = temp.resample('YE').mean()-273.15
+precip = precip.resample('YE').sum()*(60*60*24*365)/1000 #unit is kg/s and this is converted to mm/year
+autoterm = pd.read_csv('data/autoterm/Helheim.csv', index_col = 1, parse_dates=True)
+autoterm = -autoterm['181'].resample('YE').median()
+autoterm = autoterm/1000
+ds = xr.open_dataset('data/solid_ice_discharge_obs/gate.nc')
+flux_obs = ds.sel(gate=227)['discharge'].to_pandas()
+flux_obs_annual = flux_obs.resample('YE').mean()
+
+
+fig, ax = plt.subplots(3,1, figsize = (8,6), sharex = True)
+axT = ax[0]
+axP = axT.twinx()
+axIRD = ax[1]
+axCF = ax[2]
+axSID = axCF.twinx()
+
+# --- Panel labels (added here) ---
+axT.text(0.02, 0.90, "(a)", transform=ax[0].transAxes,
+           fontsize=12, fontweight="bold")
+axIRD.text(0.02, 0.90, "(b)", transform=ax[1].transAxes,
+           fontsize=12, fontweight="bold")
+axCF.text(0.02, 0.90, "(c)", transform=ax[2].transAxes,
+           fontsize=12, fontweight="bold")
+
+ird_color = 'gray'
+flux_color = 'tab:cyan'
+autoterm_color = 'tab:olive'
+temp_color = 'tab:blue'
+precip_color = 'tab:orange'
+axT.plot(temp.index, temp, label = '', color = temp_color, alpha = 0.3)
+legT = axT.plot(temp.index, temp.rolling(12,center = True).mean(), label = 'Air temperature', color = temp_color)
+axT.set_ylabel('$^\circ$ C')
+#axT.legend(loc = 'upper left')
+axP.plot(precip.index, precip, label = '', color = precip_color, alpha = 0.3)
+legP = axP.plot(precip.index, precip.rolling(12,center = True).mean(), label = 'Precipitation', color = precip_color)
+axP.set_ylabel('mm/yr')
+axT.grid(True, alpha=0.3)
+lines = legT + legP
+labels = [l.get_label() for l in lines]
+
+# Make one legend on the temperature axis
+axT.legend(lines, labels, loc="lower left")
+
+#axT.legend([legT,legP], ['Temp', 'Prec'])
+axIRD.plot(composite.index, composite, label = 'Ice rafted debris', color = ird_color)
+axIRD.set_ylabel('IRD')
+axIRD.legend(loc = 'center left')
+axIRD.grid(True, alpha=0.3)
+
+legCF = axCF.scatter(autoterm.index, autoterm, label = 'Calving front position',color = autoterm_color)
+#axCF.axhline(y=0, color = 'gray', alpha = 0.5, linestyle='--', linewidth=1)
+#axCF.axhline(y=-4.6, color = 'gray', alpha = 0.5, linestyle='--', linewidth=1)
+#axCF.axhline(y=3.20, color = 'gray', alpha = 0.5, linestyle='--', linewidth=1)
+xlim = axCF.get_xlim()
+axCF.set_xlim(xlim[0], xlim[1] + 20)
+axCF.grid(True, alpha=0.3)
+
+# Add year labels just outside the right edge
+#axCF.text(xlim[1] + 40, 0, '1940', va='center', fontsize=9, color='gray')
+#axCF.text(xlim[1] + 40, -4.6, '1994', va='center', fontsize=9, color='gray')
+#axCF.text(xlim[1] + 40, 3.2, '2021', va='center', fontsize=9, color='gray')
+
+
+
+axCF.set_ylabel('m')
+#axCF.legend(loc = 'upper left')
+legSID, = axSID.plot(flux_obs_annual.index, flux_obs_annual, label = 'Ice flux', color = flux_color)
+axSID.set_ylabel('Gt/yr')
+#axSID.legend(loc = 'upper right')
+
+# Combine handles + labels
+handles = [legCF, legSID]
+labels = [h.get_label() for h in handles]
+
+# Put the legend on the left axis (or use fig.legend to place it outside)
+axCF.legend(handles, labels, loc='center left')
+
+
+
+plt.show()
+fig.savefig('figures/paper/observed_timeseries.png', dpi = 300)
+#+end_src
+
+#+RESULTS:
+: /tmp/babel-A0aLcU/python-tWWtIc:71: SyntaxWarning: invalid escape sequence '\c'
+:   axT.set_ylabel('$^\circ$ C')
+
+
+
+
+
+
+**** Plot temperature and precipitation alone
+#+begin_src python :results output
+import xarray as xr
+import matplotlib.pyplot as plt
+import pandas as pd
+<<load_IRD>> # composite
+<<load_pism_forcing>> # temp, precip
+temp = temp.resample('YE').mean()-273.15
+precip = precip.resample('YE').sum()*(60*60*24*365)/1000 #unit is kg/s and this is converted to mm/year
+
+
+
+fig, ax = plt.subplots(2,1, figsize = (8,4), sharex = True)
+axT = ax[0]
+axP = ax[1]
+
+temp_color = 'tab:blue'
+precip_color = 'tab:orange'
+axT.plot(temp.index, temp, label = 'Air temperature', color = temp_color)
+axT.set_ylabel('$\circ$C', fontsize = '16')
+axT.legend(loc = 'upper left')
+axP.plot(precip.index, precip, label = 'Precipitation', color = precip_color)
+axP.set_ylabel('mm/yr', fontsize = '16')
+axP.legend(loc = 'upper left')
+axP.tick_params(axis='x', labelsize=16)
+axP.tick_params(axis='y', labelsize=16)
+axT.tick_params(axis='x', labelsize=16)
+axT.tick_params(axis='y', labelsize=16)
+axP.set_xlabel('Year', fontsize = '16')
+
+
+fig.tight_layout()
+plt.show()
+fig.savefig('figures/paper/obsererved_timeseries_prec_temp.png', dpi = 300)
+#+end_src
+
+#+RESULTS:
+: /tmp/babel-A0aLcU/python-o5yziP:49: SyntaxWarning: invalid escape sequence '\c'
+:   axT.set_ylabel('$\circ$C', fontsize = '16')
+
+
+*** Compare observed calving front and observed flux
+#+begin_src python :results output
+import xarray as xr
+import matplotlib.pyplot as plt
+import pandas as pd
+
+# Load and preprocess calving front data
+autoterm = pd.read_csv('data/autoterm/Helheim.csv', index_col=1, parse_dates=True)
+autoterm = -autoterm['181'].resample('YE').median() / 1000  # in km
+
+# Load flux data
+ds = xr.open_dataset('data/solid_ice_discharge_obs/gate.nc')
+#ds = ds.where(ds['coverage']>0.5)
+flux_obs = ds.sel(gate=227)['discharge'].to_pandas()
+flux_coverage = ds.sel(gate=227)['coverage'].to_pandas()
+flux_obs = flux_obs.where(flux_coverage>0.8)
+
+flux_obs_annual = flux_obs.resample('YE').mean()
+
+# Create plot
+fig, ax = plt.subplots(figsize=(8, 5))  # Slightly larger for presentation
+
+# Plot calving front position
+color1 = 'tab:olive'
+
+autoterm.plot(
+    ax=ax,
+    color=color1,
+    label='Calving front position',
+    linewidth=2.5
+    #marker='o',           # circle markers
+    #linestyle='None',     # no connecting line
+    #markersize=6          # adjust dot size
+)
+# Customize left y-axis
+ax.set_ylabel('Calving front position (km)', fontsize=18)
+ax.tick_params(axis='y', labelsize=16)
+#ax.yaxis.label.set_color(color1)
+
+# Plot ice flux on twin axis
+ax1 = ax.twinx()
+color2 = 'tab:cyan'
+flux_obs_annual.plot(
+    ax=ax1,
+    color=color2,
+    label='Observed ice flux',
+    linewidth=2.5
+)
+
+# Customize right y-axis
+ax1.set_ylabel('Ice flux (Gt/year)', fontsize=18)
+ax1.tick_params(axis='y', labelsize=16)
+#ax1.yaxis.label.set_color(color2)
+
+# Customize x-axis
+ax.set_xlabel('Year', fontsize=16)
+ax.tick_params(axis='x', labelsize=14)
+
+# Remove top and unnecessary spines
+ax.spines['top'].set_visible(False)
+ax1.spines['top'].set_visible(False)
+ax.spines['right'].set_visible(False)
+ax1.spines['left'].set_visible(False)
+
+# Enable light gridlines
+ax.grid(True, which='major', linestyle='--', linewidth=0.6, alpha=0.4)
+
+# Add combined legend (manual since twin axes)
+lines, labels = ax.get_legend_handles_labels()
+lines2, labels2 = ax1.get_legend_handles_labels()
+ax.legend(lines + lines2, labels + labels2, loc='upper left', fontsize=12)
+
+# Layout and save
+plt.tight_layout()
+fig.savefig('figures/paper/calving_fronts_vs_autoterm_presentation.png', dpi=300)
+plt.show()
+
+
+
+#+end_src
+
+#+RESULTS:
+
+#+begin_src python :results output
+import xarray as xr
+import matplotlib.pyplot as plt
+import pandas as pd
+
+# Load and preprocess calving front data
+autoterm = pd.read_csv('data/autoterm/Helheim.csv', index_col=1, parse_dates=True)
+autoterm = -autoterm['181'].resample('YE').median()
+autoterm = autoterm
+
+autoterm = autoterm / 1000
+
+# Load flux data
+ds = xr.open_dataset('data/solid_ice_discharge_obs/gate.nc')
+flux_obs = ds.sel(gate=227)['discharge'].to_pandas()
+flux_obs_annual = flux_obs.resample('YE').mean()
+
+# Create plot
+fig, ax = plt.subplots(1, 1, figsize=(7, 5), sharex=True)
+
+# Plot calving front position
+color1 = 'tab:olive'
+autoterm.plot(ax=ax, color=color1, label='Calving front position')
+ax.set_ylabel('Relative calving front position, km')
+#ax.tick_params(axis='y', labelcolor=color1)
+
+# Plot ice flux on twin axis
+ax1 = ax.twinx()
+color2 = 'tab:cyan'
+flux_obs_annual.plot(ax=ax1, color=color2, label='Observed ice flux')
+ax1.set_ylabel('Ice flux, Gt/year')
+#ax1.tick_params(axis='y', labelcolor=color2)
+
+# Remove top and right spines (box) for both axes
+#ax.spines['left'].set_color(color1)
+ax.spines['right'].set_visible(False)
+#ax1.spines['right'].set_color(color2)
+ax1.spines['left'].set_visible(False)
+ax.spines['top'].set_visible(False)
+ax1.spines['top'].set_visible(False)
+
+
+# Add light gridlines
+#ax.grid(True, which='major', linestyle='--', linewidth=0.5, alpha=0.3)
+#ax1.grid(True, which='major', linestyle='--', linewidth=0.5, alpha=0.3)
+plt.tight_layout()
+fig.savefig('figures/paper/calving_fronts_vs_autoterm.png', dpi = 300)
+plt.show()
+#+end_src
+
+#+RESULTS:
+
+
+
+*** Compare ts output with fluxgate
+#+begin_src python
+import os
+import pandas as pd
+import xarray as xr
+import matplotlib.pyplot as plt
+
+diagnostic = 'grounding_line_flux'
+
+models = [
+    "relax_1st_cycle_calvingNG_false_calvingM_false_E3_v4.2",
+    "relax_2nd_cycle_E3_v4.2",
+    "relax_3rd_cycle_E3_v4.2",
+    "relax_4th_cycle_E3_v4.2",
+    "relax_5th_cycle_E3_v4.2",
+    "relax_6th_cycle_E3_v4.2",
+    "relax_7th_cycle_E3_v4.2",
+    "relax_8th_cycle_E3_v4.2",
+    "relax_9th_cycle_E3_v4.2",
+    "relax_10th_cycle_E3_v4.2",
+    "relax_11th_cycle_E3_v4.2"
+]
+
+os.makedirs('figures/gate_vs_ts', exist_ok=True)
+
+for model in models:
+    print(f"Processing: {model}")
+    try:
+        # Load CSV and NetCDF data
+        model_gate = pd.read_csv(f'csvs/flux_{model}.csv', index_col=0)
+        with xr.open_dataset(f'model_output/ts_{model}.nc') as ds:
+            model_ts = -ds[diagnostic].to_dataframe()
+        model_ts.index = model_ts.index.year
+
+        # Align both DataFrames on years for comparison
+        common_years = model_gate.index.intersection(model_ts.index)
+        scatter_x = model_gate.loc[common_years].squeeze()   # CSV values
+        scatter_y = model_ts.loc[common_years].squeeze()     # Model values
+
+        # Create figure with 2 subplots
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(10, 8))  # stacked vertically
+
+        # Subplot 1: Line plot
+        model_ts.plot(ax=ax1, label='Model Timeseries')
+        model_gate.plot(ax=ax1, label='Gate CSV')
+        ax1.set_title(f"{model} - {diagnostic} Time Series")
+        ax1.legend()
+        ax1.set_ylabel('Flux')
+
+        # Subplot 2: Scatter plot
+        ax2.scatter(scatter_x, scatter_y)
+        ax2.plot(scatter_x, scatter_x, 'r--', label='1:1 line')  # Optional reference line
+        ax2.set_title('Model vs Gate Flux (Scatter)')
+        ax2.set_xlabel('Gate CSV Flux')
+        ax2.set_ylabel('Model Flux')
+        ax2.legend()
+
+        # Save and close figure
+        fig.tight_layout()
+        fig.savefig(f'figures/gate_vs_ts/{model}_plot.png')
+        plt.close()
+    except Exception as e:
+        print(f"Failed to process {model}: {e}")
+
+#+end_src
+
+
+*** Relaxation runs with control runs in sequence
+
+**** v4.2 using flux gate data sequence 
+#+begin_src python 
+import pandas as pd
+import xarray as xr
+import matplotlib.pyplot as plt
+import numpy as np
+fig, ax = plt.subplots(2,1, figsize = (8,5), sharex = True)
+start_index = 0
+#start_indexs = []
+
+control = "yes"
+version = 'v4.2'
+start_index = 118
+#cycle = '1st'
+#color = 'tab:gray'
+#<<plot_relax_control_sequence_v4.2>>
+
+cycle = '2nd'
+color = 'tab:orange'
+<<plot_relax_control_sequence_v4.2>>
+
+cycle = '3rd'
+color = 'tab:green'
+<<plot_relax_control_sequence_v4.2>>
+
+cycle= '4th'
+color = 'tab:red'
+<<plot_relax_control_sequence_v4.2>>
+
+cycle = '5th'
+color = 'indigo'
+<<plot_relax_control_sequence_v4.2>>
+
+cycle = '6th'
+color = 'tab:brown'
+<<plot_relax_control_sequence_v4.2>>
+
+cycle = '7th'
+color = 'tab:pink'
+<<plot_relax_control_sequence_v4.2>>
+
+cycle = '8th'
+color = 'tab:cyan'
+control = "no"
+<<plot_relax_control_sequence_v4.2>>
+
+#cycle = '9th'
+#<<plot_relax_control_sequence_v4.2>>
+
+#cycle = '10th'
+#<<plot_relax_control_sequence_v4.2>>
+
+# --- Panel (b) reference lines ---
+ax[1].axhline(y=0, color='gray', alpha=0.5, linestyle='--', linewidth=1)
+ax[1].axhline(y=-4.6, color='gray', alpha=0.5, linestyle='--', linewidth=1)
+ax[1].axhline(y=3.20, color='gray', alpha=0.5, linestyle='--', linewidth=1)
+
+xlim = ax[1].get_xlim()
+ax[1].set_xlim(xlim[0], xlim[1] + 20)
+
+# Legend for upper panel
+ax[0].legend(loc=9, ncols=2)
+
+# Add year labels outside right edge
+ax[1].text(xlim[1] + 40, 0, '1940', va='center', fontsize=9, color='gray')
+ax[1].text(xlim[1] + 40, -4.6, '1985', va='center', fontsize=9, color='gray')
+ax[1].text(xlim[1] + 40, 3.2, '2021', va='center', fontsize=9, color='gray')
+
+# --- Panel labels (added here) ---
+ax[0].text(0.02, 0.92, "(a)", transform=ax[0].transAxes,
+           fontsize=12, fontweight="bold")
+ax[1].text(0.02, 0.92, "(b)", transform=ax[1].transAxes,
+           fontsize=12, fontweight="bold")
+
+fig.savefig('figures/paper/flux_relax_control_sequence_v4.2.png', dpi=300)
+plt.show()
+#+end_src
+
+#+RESULTS:
+: None
+
+#+begin_src python 
+
+
+ax[1].axhline(y=0, color = 'gray', alpha = 0.5, linestyle='--', linewidth=1)
+ax[1].axhline(y=-4.6, color = 'gray', alpha = 0.5, linestyle='--', linewidth=1)
+ax[1].axhline(y=3.20, color = 'gray', alpha = 0.5, linestyle='--', linewidth=1)
+xlim = ax[1].get_xlim()
+ax[1].set_xlim(xlim[0], xlim[1] + 20)
+ax[0].legend(loc = 9, ncols = 2)
+# Add year labels just outside the right edge
+ax[1].text(xlim[1] + 40, 0, '1940', va='center', fontsize=9, color='gray')
+ax[1].text(xlim[1] + 40, -4.6, '1994', va='center', fontsize=9, color='gray')
+ax[1].text(xlim[1] + 40, 3.2, '2021', va='center', fontsize=9, color='gray')
+
+fig.savefig('figures/paper/flux_relax_control_sequence_v4.2.png', dpi = 300)
+plt.show()
+#+end_src
+
+#+RESULTS:
+: None
+
+#+name: plot_relax_control_sequence_v4.2
+#+begin_src python
+if cycle == '1st':
+    relax_model = 'relax_'+cycle+'_cycle_calvingNG_false_calvingM_false_E3_'+version
+else:
+    relax_model = 'relax_'+cycle+'_cycle_E3_v4.2'
+    
+#relax_model = 'relax_'+cycle+'_cycle_E3_v4.2'
+if control == 'yes':
+    control_model = 'control_'+cycle+'_relax_E3_v4.2'
+
+flux_relax = pd.read_csv('csvs/flux_profiles/flux_'+relax_model+'.csv')
+front_relax = pd.read_csv('csvs/calving_front_position/calvingfront_position_'+relax_model+'.csv')
+front_relax['Calving front distance to arbitrary reference'] = (front_relax['Calving front distance to arbitrary reference']- (31400-2700))/1000
+relax_index = range(start_index, start_index + len(flux_relax))
+flux_relax.index = relax_index
+front_relax.index = relax_index
+start_index = relax_index[-1]+1
+
+flux_relax['flux'].plot(ax=ax[0], color = 'tab:blue', zorder = 1, label = '')
+
+if control == 'yes':
+    flux_control = pd.read_csv('csvs/flux_profiles/flux_'+control_model+'.csv')
+    front_control = pd.read_csv('csvs/calving_front_position/calvingfront_position_'+control_model+'.csv')
+    front_control['Calving front distance to arbitrary reference'] = (front_control['Calving front distance to arbitrary reference'] -(31400-2700))/1000
+    flux_control = flux_control[:118]
+    front_control = front_control[:118]
+    control_index = range(start_index, start_index + len(flux_control))
+
+    flux_control.index = control_index
+    front_control.index = control_index
+
+    flux_control['flux'].plot(ax=ax[0], color = color, zorder = 2, label = cycle + ' hindcast')
+
+
+
+
+
+#ax[0].axvline(x=start_index, color='r', linewidth=1, alpha = 0.5)
+#ax[0].text(start_index -100, 125, cycle)
+#ax[0].tick_params(labelbottom=False, bottom=False)
+ax[0].set_ylabel('Flux (Gt/year)')
+
+# Expand x-axis so text can sit "outside"
+
+
+front_relax['Calving front distance to arbitrary reference'].plot(ax = ax[1], color = 'tab:blue', zorder = 1)
+if control == 'yes':
+    front_control['Calving front distance to arbitrary reference'].plot(ax = ax[1], color = color, zorder = 2)
+#ax[1].axvline(x=start_index, color='r', linewidth=1, alpha = 0.5)
+
+#ax[1].tick_params(labelbottom=False, bottom=False)
+ax[1].set_ylabel('Calving front position (km)')
+ax[0].set_xlabel('Model year')
+ax[1].set_xlabel('Model year')
+#+end_src
+
+#+RESULTS: plot_relax_control_sequence_v4.2
+
+#+RESULTS: plot_relax_control_sequence_v4.21
+: Text(89.22222222222221, 0.5, 'Calving front position (km)')
+
+
+
+
+*** Compare flux and fronts with observations
+**** Plot IRD, hindcast model and SID in top panel with calving front in lower panel the two selected models on top of each other
+#+begin_src python :results output 
+import xarray as xr
+import matplotlib.pyplot as plt
+import pandas as pd
+
+# (your data loading code unchanged)
+# ---------------------------------------------------------
+<<<load_IRD>> # — assumed this sets up a DataFrame called 'composite' with a datetime index
+<<load_pism_forcing>>
+temp = temp.resample('YE').mean()-273.15
+cycle6 = '6th'
+model6 = 'control_6th_relax_E3_v4.2'
+
+cycle7 = '7th'
+model7 = 'control_7th_relax_E3_v4.2'
+
+
+relax_model = 'relax_8th_cycle_E3_v4.2'
+
+flux_model6 = pd.read_csv('csvs/flux_profiles/flux_'+model6+'.csv', index_col = 0, parse_dates=True)
+flux_model7 = pd.read_csv('csvs/flux_profiles/flux_'+model7+'.csv', index_col = 0, parse_dates=True)
+flux_relax = pd.read_csv('csvs/flux_profiles/flux_'+relax_model+'.csv', index_col = 0, parse_dates=True)
+
+front_model6 = pd.read_csv('csvs/calving_front_position/calvingfront_position_'+model6+'.csv', index_col = 0, parse_dates = True)
+front_model6 = front_model6 - (31400-2700) # correcting so that it is approximately distance from the same point (they have been alighned at the 1989 value  where I can see on QGIS that the calving
+front_model6 = front_model6/1000
+
+front_model7 = pd.read_csv('csvs/calving_front_position/calvingfront_position_'+model7+'.csv', index_col = 0, parse_dates = True)
+front_model7 = front_model7 - (31400-2700) # correcting so that it is approximately distance from the same point (they have been alighned at the 1989 value  where I can see on QGIS that the calving
+front_model7 = front_model7/1000
+
+front_relax = pd.read_csv('csvs/calving_front_position/calvingfront_position_'+relax_model+'.csv', index_col = 0, parse_dates = True)
+front_relax = front_relax - (31400-2700) # correcting so that it is approximately distance from the same point (they have been alighned at the 1989 value  where I can see on QGIS that the calving
+front_relax = front_relax/1000
+
+
+time_shift = 1897 - 1779 +1
+front_relax.index = front_relax.index + pd.DateOffset(years = time_shift)
+flux_relax.index = flux_relax.index  + pd.DateOffset(years = time_shift)
+#temp_cold.index = temp_cold.index + pd.DateOffset(years = time_shift)
+
+
+
+
+autoterm = pd.read_csv('data/autoterm/Helheim.csv', index_col = 1, parse_dates=True)
+autoterm = -autoterm['181'].resample('YE').median()
+autoterm = autoterm/1000
+
+    
+
+ds = xr.open_dataset('data/solid_ice_discharge_obs/gate.nc')
+#flux_obs = ds.sel(gate=227)['discharge'].to_pandas()
+#flux_obs_annual = flux_obs.resample('YE').mean()
+
+flux_obs = ds.sel(gate=227)['discharge'].to_pandas()
+flux_coverage = ds.sel(gate=227)['coverage'].to_pandas()
+flux_obs = flux_obs.where(flux_coverage>0.8)
+flux_obs_annual = flux_obs.resample('YE').mean()
+# Define colors
+
+ird_color = 'black'
+flux_color = 'tab:cyan'
+autoterm_color = 'tab:olive'
+#bjork_color = 'tab:orange'
+model6_color = 'tab:brown'
+model7_color = 'tab:pink'
+
+# all data reading ... unchanged
+# ---------------------------------------------------------
+
+# ===== Plotting =====
+
+plt.rcParams.update({
+    "font.size": 11,
+    "axes.labelsize": 11,
+    "axes.titlesize": 12,
+    "legend.fontsize": 10,
+    "xtick.labelsize": 10,
+    "ytick.labelsize": 10,
+})
+
+fig, axs = plt.subplots(
+    3, 1, figsize=(8, 6.2),
+    sharex=True,
+    gridspec_kw={"hspace": 0.25}
+)
+
+ax_top, ax_mid, ax_bot = axs
+
+# ---------------------------------------------------------
+# Panel (a): IRD composite
+# ---------------------------------------------------------
+ax_top.plot(composite.index, composite['composite'],
+            color="black", lw=1.4, label="IRD")
+
+ax_top.set_ylabel("g m$^{-2}$ yr$^{-2}$")
+ax_top.grid(True, alpha=0.4)
+ax_top.legend(loc="center left")
+# Panel label
+ax_top.text(0.02, 0.90, "(a)", transform=ax_top.transAxes,
+            fontsize=12, fontweight="bold")
+
+# ---------------------------------------------------------
+# Panel (b): Ice flux
+# ---------------------------------------------------------
+ax_mid.scatter(flux_obs_annual.index, flux_obs_annual,
+               color="tab:cyan", s=18, label="Observed")
+
+ax_mid.plot(flux_model6.index, flux_model6,
+            color='tab:brown', lw=1.4, label='6th Hindcast')
+ax_mid.plot(flux_model7.index, flux_model7,
+            color='tab:pink', lw=1.4, label='7th Hindcast')
+ax_mid.plot(flux_relax.index, flux_relax,
+            color='gray', alpha=0.8, lw=1.3, label='7th Control')
+
+ax_mid.set_ylabel("Gt yr$^{-1}$")
+ax_mid.set_ylim(10, 40)
+ax_mid.grid(True, alpha=0.4)
+ax_mid.legend(loc="center left")
+
+ax_mid.text(0.02, 0.90, "(b)", transform=ax_mid.transAxes,
+            fontsize=12, fontweight="bold")
+
+# ---------------------------------------------------------
+# Panel (c): Calving front position
+# ---------------------------------------------------------
+ax_bot.scatter(autoterm.index, autoterm,
+               color="tab:olive", s=18, label="Observed front")
+
+ax_bot.plot(front_model6.index, front_model6,
+            color='tab:brown', lw=1.4, label='6th Hindcast')
+ax_bot.plot(front_model7.index, front_model7,
+            color='tab:pink', lw=1.4, label='7th Hindcast')
+ax_bot.plot(front_relax.index, front_relax,
+            color='gray', alpha=0.8, lw=1.3, label='7th Control')
+
+ax_bot.set_ylabel("km")
+ax_bot.set_xlabel("Year")
+
+# Reference lines
+ax_bot.axhline(0, color='gray', alpha=0.5, linestyle='--', lw=1)
+ax_bot.axhline(-4.6, color='gray', alpha=0.5, linestyle='--', lw=1)
+ax_bot.axhline(3.2, color='gray', alpha=0.5, linestyle='--', lw=1)
+
+# Move right-side reference years a bit outward
+xlim = ax_bot.get_xlim()
+right_x = xlim[1] - xlim[1]*0.1 #+ (xlim[1] - xlim[0]) * 0.0
+
+ax_bot.text(right_x, 0, "1940", va="center", color="gray")
+ax_bot.text(right_x, -4.6, "1985", va="center", color="gray")
+ax_bot.text(right_x, 3.2, "2021", va="center", color="gray")
+
+ax_bot.grid(True, alpha=0.4)
+ax_bot.legend( loc="center left")
+
+ax_bot.text(0.02, 0.90, "(c)", transform=ax_bot.transAxes,
+            fontsize=12, fontweight="bold")
+
+# ---------------------------------------------------------
+# Axes limits
+# ---------------------------------------------------------
+start = min(composite.index.min(), flux_obs_annual.index.min())
+end   = max(composite.index.max(), flux_obs_annual.index.max())
+
+for ax in axs:
+    ax.set_xlim(start, end)
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+
+# ---------------------------------------------------------
+# Final layout
+# ---------------------------------------------------------
+plt.tight_layout()
+fig.savefig(
+    "figures/paper/6th_and_7th_ird_vs_sid_vs_obs_fronts_vs_model_v42.png",
+    dpi=300,
+    bbox_inches="tight"
+)
+plt.show()
+
+
+#+end_src
+
+#+RESULTS:
+: /tmp/babel-A0aLcU/python-A9gmxc:192: UserWarning: This figure includes Axes that are not compatible with tight_layout, so results might be incorrect.
+:   plt.tight_layout()
+
+#+begin_src python :results output 
+import xarray as xr
+import matplotlib.pyplot as plt
+import pandas as pd
+
+<<load_IRD>> # — assumed this sets up a DataFrame called 'composite' with a datetime index
+<<load_pism_forcing>>
+temp = temp.resample('YE').mean()-273.15
+cycle6 = '6th'
+model6 = 'control_6th_relax_E3_v4.2'
+
+cycle7 = '7th'
+model7 = 'control_7th_relax_E3_v4.2'
+
+
+relax_model = 'relax_8th_cycle_E3_v4.2'
+
+flux_model6 = pd.read_csv('csvs/flux_profiles/flux_'+model6+'.csv', index_col = 0, parse_dates=True)
+flux_model7 = pd.read_csv('csvs/flux_profiles/flux_'+model7+'.csv', index_col = 0, parse_dates=True)
+flux_relax = pd.read_csv('csvs/flux_profiles/flux_'+relax_model+'.csv', index_col = 0, parse_dates=True)
+
+front_model6 = pd.read_csv('csvs/calving_front_position/calvingfront_position_'+model6+'.csv', index_col = 0, parse_dates = True)
+front_model6 = front_model6 - (31400-2700) # correcting so that it is approximately distance from the same point (they have been alighned at the 1989 value  where I can see on QGIS that the calving
+front_model6 = front_model6/1000
+
+front_model7 = pd.read_csv('csvs/calving_front_position/calvingfront_position_'+model7+'.csv', index_col = 0, parse_dates = True)
+front_model7 = front_model7 - (31400-2700) # correcting so that it is approximately distance from the same point (they have been alighned at the 1989 value  where I can see on QGIS that the calving
+front_model7 = front_model7/1000
+
+front_relax = pd.read_csv('csvs/calving_front_position/calvingfront_position_'+relax_model+'.csv', index_col = 0, parse_dates = True)
+front_relax = front_relax - (31400-2700) # correcting so that it is approximately distance from the same point (they have been alighned at the 1989 value  where I can see on QGIS that the calving
+front_relax = front_relax/1000
+
+
+time_shift = 1897 - 1779 +1
+front_relax.index = front_relax.index + pd.DateOffset(years = time_shift)
+flux_relax.index = flux_relax.index  + pd.DateOffset(years = time_shift)
+#temp_cold.index = temp_cold.index + pd.DateOffset(years = time_shift)
+
+
+
+
+autoterm = pd.read_csv('data/autoterm/Helheim.csv', index_col = 1, parse_dates=True)
+autoterm = -autoterm['181'].resample('YE').median()
+autoterm = autoterm/1000
+
+    
+
+ds = xr.open_dataset('data/solid_ice_discharge_obs/gate.nc')
+#flux_obs = ds.sel(gate=227)['discharge'].to_pandas()
+#flux_obs_annual = flux_obs.resample('YE').mean()
+
+flux_obs = ds.sel(gate=227)['discharge'].to_pandas()
+flux_coverage = ds.sel(gate=227)['coverage'].to_pandas()
+flux_obs = flux_obs.where(flux_coverage>0.8)
+flux_obs_annual = flux_obs.resample('YE').mean()
+# Define colors
+
+ird_color = 'black'
+flux_color = 'tab:cyan'
+autoterm_color = 'tab:olive'
+#bjork_color = 'tab:orange'
+model6_color = 'tab:brown'
+model7_color = 'tab:pink'
+
+# Create plot
+fig, axs = plt.subplots(3,1, figsize=(8, 5), sharex = True)
+#ax0 = axs[0]
+ax = axs[0]
+#ax1 = ax.twinx()
+ax2 = axs[2]
+ax15 = axs[1]
+# Plot IRD composite (left axis)
+#ax0.set_title(figuretitle)
+#ax0.plot(temp, color = 'tab:blue', label = 'Temperature')
+#ax0.set_ylabel('$\circ$C', fontsize=11)
+ax.plot(composite.index,composite['composite'], color=ird_color, label='IRD')
+
+# Plot ice flux (right axis)
+ax15.scatter(flux_obs_annual.index, flux_obs_annual, color=flux_color, label='Observed')
+ax15.plot(flux_model6.index, flux_model6, color = model6_color, label = '6th Hindcast')
+ax15.plot(flux_model7.index, flux_model7, color = model7_color, label = '7th Hindcast')
+ax15.plot(flux_relax.index, flux_relax, color = 'gray', alpha = 0.8, label = '7th Control')
+ax15.legend()
+# Plot calving fronts lower panel
+ax2.scatter(autoterm.index, autoterm, color = autoterm_color, label = 'Observed calving front')
+#ax2.scatter(bjork.index, bjork['HubDist'], color = bjork_color, label = 'Bjørk et al., 2012')
+ax2.plot(front_model6.index, front_model6, color = model6_color, label = '6th Hindcast')
+ax2.plot(front_model7.index, front_model7, color = model7_color, label = '7th Hindcast')
+ax2.plot(front_relax.index, front_relax, color = 'gray', alpha = 0.8, label = '7th Control')
+ax2.legend()
+# Set axis labels and colors
+ax.set_ylabel('g m$^{⁻2}$ yr$^{⁻2}$', fontsize=11)
+#ax.tick_params(axis='y', labelcolor=ird_color)
+ax15.set_ylabel(' Gt/year', fontsize=11)
+ax15.set_ylim(10,40)
+#ax15.tick_params(axis='y', labelcolor=flux_color)
+#ax15.set_ylim(15, 40)
+ax2.set_ylabel('km', fontsize=11)
+ax2.set_xlabel('Year', fontsize=11)
+
+
+ax2.scatter(autoterm.index, autoterm, label = 'Calving front position',color = autoterm_color)
+ax2.axhline(y=0, color = 'gray', alpha = 0.5, linestyle='--', linewidth=1)
+ax2.axhline(y=-4.6, color = 'gray', alpha = 0.5, linestyle='--', linewidth=1)
+ax2.axhline(y=3.20, color = 'gray', alpha = 0.5, linestyle='--', linewidth=1)
+xlim = ax2.get_xlim()
+ax2.set_xlim(xlim[0], xlim[1] + 20)
+
+# Add year labels just outside the right edge
+ax2.text(xlim[1] + 40, 0, '1940', va='center', fontsize=9, color='gray')
+ax2.text(xlim[1] + 40, -4.6, '1994', va='center', fontsize=9, color='gray')
+ax2.text(xlim[1] + 40, 3.2, '2021', va='center', fontsize=9, color='gray')
+
+# Color the spines to match the data
+#for spine in ['left', 'bottom']:
+#    ax.spines[spine].set_color(ird_color)
+#for spine in ['right']:
+#    ax1.spines[spine].set_color(flux_color)
+
+#ax0.tick_params(axis='x', labelsize=16)
+#ax0.tick_params(axis='y', labelsize=11)
+ax.tick_params(axis='x', labelsize=11)
+ax.tick_params(axis='y', labelsize=11)
+ax15.tick_params(axis='x', labelsize=11)
+ax15.tick_params(axis='y', labelsize=11)
+ax2.tick_params(axis='x', labelsize=11)
+ax2.tick_params(axis='y', labelsize=11)
+
+# Hide unused spines
+#ax0.spines['top'].set_visible(False)
+#ax0.spines['right'].set_visible(False)
+ax.spines['top'].set_visible(False)
+ax15.spines['top'].set_visible(False)
+ax2.spines['top'].set_visible(False)
+#ax1.spines['left'].set_visible(False)
+ax15.spines['right'].set_visible(False)
+ax.spines['right'].set_visible(False)
+ax2.spines['right'].set_visible(False)
+#ax0.grid(True)
+ax.grid(True)
+ax15.grid(True)
+ax2.grid(True)
+# Set x-axis limits to cover both datasets
+start = min(composite.index.min(), flux_obs_annual.index.min())
+end = max(composite.index.max(), flux_obs_annual.index.max())
+ax.set_xlim(start, end)
+ax2.set_xlim(start, end)
+plt.tight_layout()
+fig.savefig('figures/paper/6th_and_7th_ird_vs_sid_vs_obs_fronts_vs_model_v42.png', dpi = 300)
+plt.show()
+#+end_src
+
+#+RESULTS:
+
+
+
+
+*** Plot mean fluxgate velocity and thickness timeseries
+#+begin_src python
+import pandas as pd
+model = 'relax_1st_cycle_E3_v4.2'
+model = "relax_1st_cycle_calvingNG_false_calvingM_false_E3_v4.2"
+#model2 = 'control_6th_relax_E3_v4.2_perturbed_p20'
+
+vel = pd.read_csv('csvs/flux_profiles/vel_'+model+'.csv', index_col = 0, parse_dates = True)
+thk = pd.read_csv('csvs/flux_profiles/thk_'+model+'.csv', index_col = 0, parse_dates = True)
+#vel2 = pd.read_csv('csvs/flux_profiles/vel_'+model2+'.csv', index_col = 0, parse_dates = True)
+#thk2 = pd.read_csv('csvs/flux_profiles/thk_'+model2+'.csv', index_col = 0, parse_dates = True)
+obs_vel = pd.read_csv('data/promice/gate_vel_from_sid.csv', index_col = 0, parse_dates = True)
+
+
+fig,ax = plt.subplots(1,1)
+ax.plot(vel)
+#ax.plot(vel2)
+ax.plot(obs_vel)
+
+
+plt.show()
+
+#+end_src
+
+#+RESULTS:
+: None
+
+
+
+
+
+
+
+*** Calculate total freshwater discharge from calving
+
+#+begin_src python
+import pandas as pd
+import matplotlib.pyplot as plt
+
+relax_model = 'relax_7th_cycle_E3_v4.2'
+control_model = "control_6th_relax_E3_v4.2"
+flux_relax = pd.read_csv('csvs/flux_profiles/flux_'+relax_model+'.csv')
+flux_control = pd.read_csv('csvs/flux_profiles/flux_'+control_model+'.csv')
+
+mask = ( flux_control["Unnamed: 0"] >= 1949) & ( flux_control["Unnamed: 0"] <= 1955)
+indices = flux_control.index[mask]
+
+peak_flux_historic = flux_control['flux'].iloc[indices].sum()
+peak_flux_relax = flux_relax['flux'].iloc[indices].sum()
+
+percent = (peak_flux_historic - peak_flux_relax) / peak_flux_relax *100
+
+print('peak_flux_historic')
+print(peak_flux_historic)
+print('peak_flux_relax')
+print(peak_flux_relax)
+
+
+print('The total flux from the historical run is '+ str(percent) + ' % larger than the relaxation run')
+
+#+end_src
+
+
+#+begin_src python
+import pandas as pd
+import matplotlib.pyplot as plt
+
+relax_model = 'relax_8th_cycle_E3_v4.2'
+control_model = "control_7th_relax_E3_v4.2"
+flux_relax = pd.read_csv('csvs/flux_profiles/flux_'+relax_model+'.csv')
+flux_control = pd.read_csv('csvs/flux_profiles/flux_'+control_model+'.csv')
+
+mask = ( flux_control["Unnamed: 0"] >= 1949) & ( flux_control["Unnamed: 0"] <= 1955)
+indices = flux_control.index[mask]
+
+peak_flux_historic = flux_control['flux'].iloc[indices].sum()
+peak_flux_relax = flux_relax['flux'].iloc[indices].sum()
+
+percent = (peak_flux_historic - peak_flux_relax) / peak_flux_relax *100
+
+print('peak_flux_historic')
+print(peak_flux_historic)
+print('peak_flux_relax')
+print(peak_flux_relax)
+
+
+print('The total flux from the historical run is '+ str(percent) + ' % larger than the relaxation run')
+
+#+end_src
+
+#+RESULTS:
+: None
+
+#+begin_src python
+import pandas as pd
+relax_model = 'relax_7th_cycle_E3_v4.2'
+control_model = "relax_8th_cycle_E3_v4.2"
+flux_relax = pd.read_csv('csvs/flux_profiles/flux_'+relax_model+'.csv', index_col = 0)
+flux_control = pd.read_csv('csvs/flux_profiles/flux_'+control_model+'.csv', index_col = 0)
+
+flux_control_total = flux_control[:118].sum()
+flux_relax_total = flux_relax.sum()
+
+print(flux_control_total)
+print(flux_relax_total)
+percent = (flux_control_total-flux_relax_total)/flux_relax_total*100
+print('The total flux from the historical run is '+ str(percent) + ' % larger than the relaxation run')
+
+#+end_src
+
+#+begin_src python
+
+#model2 = 'control_6th_relax_E3_v4.2_perturbed_p20'
+
+vel = pd.read_csv('csvs/flux_profiles/vel_'+model+'.csv', index_col = 0, parse_dates = True)
+thk = pd.read_csv('csvs/flux_profiles/thk_'+model+'.csv', index_col = 0, parse_dates = True)
+#vel2 = pd.read_csv('csvs/flux_profiles/vel_'+model2+'.csv', index_col = 0, parse_dates = True)
+#thk2 = pd.read_csv('csvs/flux_profiles/thk_'+model2+'.csv', index_col = 0, parse_dates = True)
+obs_vel = pd.read_csv('data/promice/gate_vel_from_sid.csv', index_col = 0, parse_dates = True)
+
+
+fig,ax = plt.subplots(1,1)
+ax.plot(vel)
+#ax.plot(vel2)
+ax.plot(obs_vel)
+
+
+plt.show()
+#+end_src
+
+** Plot profiles
+*** Relaxation runs final
+#+begin_src python 
+import matplotlib.pyplot as plt
+import pandas as pd
+import matplotlib.colors as mcolors
+import numpy as np
+
+bed = pd.read_csv('csvs/centerline_profiles/centerline_topg.csv')
+bed.index = bed.index.astype(float)*100/1000
+
+obs = pd.read_csv('csvs/centerline_profiles/observed_geometry_and_velocity.csv')
+obs['vel']=obs['vel']*365
+obs.index = obs.index.astype(float)*100/1000
+obs['surf'] = bed['topg'] + obs['thk']
+#print(obs)
+
+obs_1985 = pd.read_csv('csvs/centerline_profiles/observed_velocity_1985.csv')
+obs_1985.index = obs_1985.index.astype(float)*100/1000
+
+obs_esacci_raw = pd.read_csv('csvs/centerline_profiles/centerline_vel_ESA_CCI.csv', index_col = 0, parse_dates = True )
+obs_esacci_year = (obs_esacci_raw.resample('Y').mean())
+obs_esacci_year.index = obs_esacci_year.index.year
+obs_esacci_year = obs_esacci_year.T
+obs_esacci = obs_esacci_year*365
+obs_esacci.index = obs_esacci.index.astype(float)*100/1000
+
+aerodem81 = pd.read_csv('csvs/centerline_profiles/aerodem_1981.csv')
+aerodem81['aerodem'] = aerodem81['aerodem'] -50
+aerodem81['aerodem'] = aerodem81['aerodem'].where(aerodem81['aerodem']>100)
+aerodem81.index = aerodem81.index.astype(float)*100/1000
+thk81 = aerodem81['aerodem']#-obs['bed']
+
+
+models = [
+    "relax_1st_cycle_calvingNG_false_calvingM_false_E3_v4.2",
+    "relax_2nd_cycle_E3_v4.2",
+    "relax_3rd_cycle_E3_v4.2",
+    "relax_4th_cycle_E3_v4.2",
+    "relax_5th_cycle_E3_v4.2",
+    "relax_6th_cycle_E3_v4.2",
+    "relax_7th_cycle_E3_v4.2",
+    "relax_8th_cycle_E3_v4.2"
+]
+
+labels = [ "118 (1st)", "236 (2nd)", "354 (3rd)", "472 (4th)", "590 (5th)","708 (6th)","826 (7th)","944 (8th)","1062 (9th)","1180 (10th)"]
+
+rolling_window = 10  # Adjust based on how much smoothing you want
+
+fig, ax = plt.subplots(figsize=(8, 3))
+
+# Plot observed velocity
+ax.plot(obs.index, obs['vel'].rolling(rolling_window, center=True).mean(), label='Observed 2022', linewidth=2, color='black')
+ax.plot(obs_1985.index, obs_1985['vel'].rolling(rolling_window, center=True).mean(), label='Observed 1985', linewidth=2, color='gray')
+
+colors = plt.cm.get_cmap('viridis', 8).colors
+
+# Plot model velocities (smoothed)
+for i,model_name in enumerate(models):
+    model_df = pd.read_csv(f'csvs/centerline_profiles/final_centerline_vel_and_thk_{model_name}.csv')
+    model_df.index = model_df.index.astype(float) * 100 / 1000  # in km
+    
+    smoothed_vel = model_df['vel'].rolling(rolling_window, center=True).mean()
+    ax.plot(model_df.index, smoothed_vel, alpha = 0.8, color = colors[i])
+
+model_df = pd.read_csv(f'csvs/centerline_profiles/final_centerline_vel_and_thk_relax_6th_cycle_E3_v4.2.csv')
+model_df.index = model_df.index.astype(float) * 100 / 1000
+smoothed_vel = model_df['vel'].rolling(rolling_window, center=True).mean()
+ax.plot(model_df.index, smoothed_vel, label='590 model years (6th)', alpha = 0.8, color = 'red')
+
+model_df = pd.read_csv(f'csvs/centerline_profiles/final_centerline_vel_and_thk_control_6th_relax_E3_v4.2.csv')
+model_df.index = model_df.index.astype(float) * 100 / 1000
+smoothed_vel = model_df['vel'].rolling(rolling_window, center=True).mean()
+ax.plot(model_df.index, smoothed_vel, label='Final (6th)', alpha = 0.8, color = 'red')
+
+model_df = pd.read_csv(f'csvs/centerline_profiles/final_centerline_vel_and_thk_relax_7th_cycle_E3_v4.2.csv')
+model_df.index = model_df.index.astype(float) * 100 / 1000
+smoothed_vel = model_df['vel'].rolling(rolling_window, center=True).mean()
+ax.plot(model_df.index, smoothed_vel, label='708 model years (7th)', alpha = 0.8, color = 'green', linestyle = '--')
+
+model_df = pd.read_csv(f'csvs/centerline_profiles/final_centerline_vel_and_thk_control_7th_relax_E3_v4.2.csv')
+model_df.index = model_df.index.astype(float) * 100 / 1000
+smoothed_vel = model_df['vel'].rolling(rolling_window, center=True).mean()
+ax.plot(model_df.index, smoothed_vel, label='Final (7th)', alpha = 0.8, color = 'green', linestyle = '--')
+
+
+#ax.set_title('Smoothed Velocity Profiles Along Centerline')
+ax.set_xlabel('Distance along centerline (km)', fontsize=9)
+ax.set_ylabel('Velocity (m/year)', fontsize=9)
+ax.tick_params(axis='x', labelsize=9)
+ax.tick_params(axis='y', labelsize=9)
+
+ax.legend(loc='best', fontsize='small')
+ax.grid(True, linestyle='--', alpha=0.3)
+
+plt.tight_layout()
+fig.savefig('til_nanna/final_centerline_vel_relaxation_smoothed.png', dpi=300)
+
+colors = plt.cm.get_cmap('viridis', 8).colors
+
+colors = np.array([plt.cm.rainbow(i/7) for i in range(8)])
+colors = np.flipud(colors)
+labels = [ "118 (1st)", "236 (2nd)", "354 (3rd)", "472 (4th)", "590 (5th)","708 (6th)","826 (7th)","944 (8th)","1062 (9th)","1180 (10th)"]
+
+fig, ax = plt.subplots(figsize=(11, 4))
+
+# Observed thickness (smoothed)
+ax.plot(obs.index, obs['surf'].rolling(rolling_window, center=True).mean(), label='Observed 2022', linewidth=2, color='black')
+ax.plot(thk81.index, thk81.rolling(rolling_window, center=True).mean(), label='Observed 1981', linewidth=2, color='black', linestyle = '--')
+
+# Model thickness (smoothed)
+
+for i in range(0,5):
+
+    model_name = models[i]
+    model_df = pd.read_csv(f'csvs/centerline_profiles/final_centerline_vel_and_thk_{model_name}.csv')
+    model_df.index = model_df.index.astype(float) * 100 / 1000
+    model_df['surf'] = bed['topg']+model_df['thk']
+    smoothed = model_df.rolling(rolling_window, center=True).mean()
+    ax.plot(model_df.index, smoothed['surf'], alpha = 0.6, color = colors[i], label = labels[i]) #
+
+i = 5
+model_name = models[i]
+model_df = pd.read_csv(f'csvs/centerline_profiles/final_centerline_vel_and_thk_{model_name}.csv')
+model_df.index = model_df.index.astype(float) * 100 / 1000
+model_df['surf'] = bed['topg']+model_df['thk']
+smoothed = model_df.rolling(rolling_window, center=True).mean()
+ax.plot(model_df.index, smoothed['surf'], linewidth = 2, color = colors[i], label = labels[i]) #
+
+i = 6
+model_name = models[i]
+model_df = pd.read_csv(f'csvs/centerline_profiles/final_centerline_vel_and_thk_{model_name}.csv')
+model_df.index = model_df.index.astype(float) * 100 / 1000
+model_df['surf'] = bed['topg']+model_df['thk']
+smoothed = model_df.rolling(rolling_window, center=True).mean()
+ax.plot(model_df.index, smoothed['surf'], linewidth = 2, color = colors[i], label = labels[i], linestyle = '--') #
+
+
+
+ax.plot(bed['topg'].rolling(rolling_window, center=True).mean(), linewidth = 2, color = 'tab:brown', label = 'Basal topography')
+#ax.set_title('Smoothed Surface Profiles Along Centerline')
+ax.set_xlabel('Distance along centerline (km)', fontsize=9)
+ax.set_ylabel('Ice surface heigh (m)', fontsize=9)
+ax.legend(loc=2, fontsize=9)
+ax.tick_params(axis='x', labelsize=9)
+ax.tick_params(axis='y', labelsize=9)
+ax.grid(True, linestyle='--', alpha=0.3)
+
+plt.tight_layout()
+fig.savefig('figures/paper/final_centerline_thk_relaxation_smoothed.png', dpi=300)
+plt.show()
+
+
+#+end_src
+
+#+RESULTS:
+: None
+*** Control runs
+
+#+begin_src python 
+import matplotlib.pyplot as plt
+import pandas as pd
+
+obs = pd.read_csv('csvs/centerline_profiles/observed_geometry_and_velocity.csv')
+obs['vel']=obs['vel']*365 
+#print(obs)
+
+
+
+models = [
+    "control_1st_relax_E3_v4.2",
+    "control_2nd_relax_E3_v4.2",
+    "control_3rd_relax_E3_v4.2",
+    "control_4th_relax_E3_v4.2",
+    "control_5th_relax_E3_v4.2",
+    "control_6th_relax_E3_v4.2",
+    "control_7th_relax_E3_v4.2",
+    "control_8th_relax_E3_v4.2",
+    "control_9th_relax_E3_v4.2"
+]
+
+
+
+# Create the plot
+fig, ax = plt.subplots(figsize=(10, 6))
+
+# Plot observed velocity
+ax.plot(obs['vel'], label='Observed', linewidth=2, color='black')
+
+# Plot each model velocity profile
+for model_name in models:
+    model_df = pd.read_csv(f'csvs/centerline_profiles/final_centerline_vel_and_thk_{model_name}.csv')
+    ax.plot(model_df['vel'], label=model_name)
+
+# Final plot adjustments
+ax.set_title('Velocity Profiles Along Centerline')
+ax.set_xlabel('Profile Index')  # Adjust if there's a distance column instead
+ax.set_ylabel('Velocity (m/year)')
+ax.legend(loc='best', fontsize='small')
+ax.grid(True)
+
+plt.tight_layout()
+fig.savefig('til_nanna/final_centerline_vel_control.png')
+
+# Create the plot
+fig, ax = plt.subplots(figsize=(10, 6))
+
+# Plot observed velocity
+ax.plot(obs['thk'], label='Observed', linewidth=2, color='black')
+
+# Plot each model velocity profile
+for model_name in models:
+    model_df = pd.read_csv(f'csvs/centerline_profiles/final_centerline_vel_and_thk_{model_name}.csv')
+    ax.plot(model_df['thk'], label=model_name)
+
+# Final plot adjustments
+ax.set_title('Thickness Profiles Along Centerline')
+ax.set_xlabel('Profile Index')  # Adjust if there's a distance column instead
+ax.set_ylabel('Thickness')
+ax.legend(loc='best', fontsize='small')
+ax.grid(True)
+
+plt.tight_layout()
+plt.show()
+fig.savefig('til_nanna/final_centerline_thk_control.png')
+
+#+end_src
+
+#+RESULTS:
+: None
+
+
+
+
+
+
+
