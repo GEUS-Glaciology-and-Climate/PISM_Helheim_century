@@ -1,4 +1,4 @@
-#+Title: Code for: Century-scale hindcasting of glacier flux using ice-rafted debris: A step toward improved model initialisation
+#+Title: Workflow for: Century-scale hindcasting of glacier flux using ice-rafted debris: A step toward improved model initialisation
 #+Author: Signe Hillerup Larsen
 # #+OPTIONS:   H:4 num:4 toc:nil \n:nil ::t |:t ^:{} -:t f:t *:t <:t
 
@@ -19,7 +19,7 @@ conda create -n dynahide -c conda-forge geopandas fiona pandas xarray cftime ras
 #+end_src
 
 
-* PISM and focinh
+* PISM
 ** Make pism model nc files 
 *** Make bootstrappable nc file for entire Greenland
 
@@ -285,117 +285,6 @@ python fill_climate_values.py $WORKINGFILE
 #+END_SRC
 
 
-
-
-
-**** Take a look at the pism model file using xarray
-
- #+BEGIN_SRC python :results output
-import xarray as xr
-import numpy as np
-
-with xr.open_dataset('pism_greenland_1km_v2-filled.nc') as src:
-    variable='thk'
-    #variable='climatic_mass_balance'
-    variable='ice_surface_temp'
-    #variable='precipitation'
-    src[variable].plot()
-
-    print(src[variable].min())
-    print(src[variable].max())
-    #src.topg.plot()
- #+END_SRC
-
- #+RESULTS:
- :results:
- # Out [8]: 
- # output
- ---------------------------------------------------------------------------
- KeyError                                  Traceback (most recent call last)
- ~/miniconda3/envs/py38/lib/python3.8/site-packages/xarray/backends/file_manager.py in _acquire_with_cache_info(self, needs_lock)
-     197             try:
- --> 198                 file = self._cache[self._key]
-     199             except KeyError:
-
- ~/miniconda3/envs/py38/lib/python3.8/site-packages/xarray/backends/lru_cache.py in __getitem__(self, key)
-      52         with self._lock:
- ---> 53             value = self._cache[key]
-      54             self._cache.move_to_end(key)
-
- KeyError: [<class 'netCDF4._netCDF4.Dataset'>, ('/home/shl/OneDrive/projects/dynahide_v2/pism_greenland_1km_v2-filled.nc',), 'r', (('clobber', True), ('diskless', False), ('format', 'NETCDF4'), ('persist', False))]
-
- During handling of the above exception, another exception occurred:
-
- OSError                                   Traceback (most recent call last)
- /tmp/ipykernel_10139/1535156387.py in <module>
-       2 import numpy as np
-       3 
- ----> 4 with xr.open_dataset('pism_greenland_1km_v2-filled.nc') as src:
-       5     variable='thk'
-       6     #variable='climatic_mass_balance'
-
- ~/miniconda3/envs/py38/lib/python3.8/site-packages/xarray/backends/api.py in open_dataset(filename_or_obj, group, decode_cf, mask_and_scale, decode_times, autoclose, concat_characters, decode_coords, engine, chunks, lock, cache, drop_variables, backend_kwargs, use_cftime, decode_timedelta)
-     506             engine = _get_default_engine(filename_or_obj, allow_remote=True)
-     507         if engine == "netcdf4":
- --> 508             store = backends.NetCDF4DataStore.open(
-     509                 filename_or_obj, group=group, lock=lock, **backend_kwargs
-     510             )
-
- ~/miniconda3/envs/py38/lib/python3.8/site-packages/xarray/backends/netCDF4_.py in open(cls, filename, mode, format, group, clobber, diskless, persist, lock, lock_maker, autoclose)
-     356             netCDF4.Dataset, filename, mode=mode, kwargs=kwargs
-     357         )
- --> 358         return cls(manager, group=group, mode=mode, lock=lock, autoclose=autoclose)
-     359 
-     360     def _acquire(self, needs_lock=True):
-
- ~/miniconda3/envs/py38/lib/python3.8/site-packages/xarray/backends/netCDF4_.py in __init__(self, manager, group, mode, lock, autoclose)
-     312         self._group = group
-     313         self._mode = mode
- --> 314         self.format = self.ds.data_model
-     315         self._filename = self.ds.filepath()
-     316         self.is_remote = is_remote_uri(self._filename)
-
- ~/miniconda3/envs/py38/lib/python3.8/site-packages/xarray/backends/netCDF4_.py in ds(self)
-     365     @property
-     366     def ds(self):
- --> 367         return self._acquire()
-     368 
-     369     def open_store_variable(self, name, var):
-
- ~/miniconda3/envs/py38/lib/python3.8/site-packages/xarray/backends/netCDF4_.py in _acquire(self, needs_lock)
-     359 
-     360     def _acquire(self, needs_lock=True):
- --> 361         with self._manager.acquire_context(needs_lock) as root:
-     362             ds = _nc4_require_group(root, self._group, self._mode)
-     363         return ds
-
- ~/miniconda3/envs/py38/lib/python3.8/contextlib.py in __enter__(self)
-     111         del self.args, self.kwds, self.func
-     112         try:
- --> 113             return next(self.gen)
-     114         except StopIteration:
-     115             raise RuntimeError("generator didn't yield") from None
-
- ~/miniconda3/envs/py38/lib/python3.8/site-packages/xarray/backends/file_manager.py in acquire_context(self, needs_lock)
-     184     def acquire_context(self, needs_lock=True):
-     185         """Context manager for acquiring a file."""
- --> 186         file, cached = self._acquire_with_cache_info(needs_lock)
-     187         try:
-     188             yield file
-
- ~/miniconda3/envs/py38/lib/python3.8/site-packages/xarray/backends/file_manager.py in _acquire_with_cache_info(self, needs_lock)
-     202                     kwargs = kwargs.copy()
-     203                     kwargs["mode"] = self._mode
- --> 204                 file = self._opener(*self._args, **kwargs)
-     205                 if self._mode == "w":
-     206                     # ensure file doesn't get overriden when opened again
-
- netCDF4/_netCDF4.pyx in netCDF4._netCDF4.Dataset.__init__()
-
- netCDF4/_netCDF4.pyx in netCDF4._netCDF4._ensure_nc_success()
-
- OSError: [Errno -51] NetCDF: Unknown file format: b'/home/shl/OneDrive/projects/dynahide_v2/pism_greenland_1km_v2-filled.nc'
- :end:
 
 
 
@@ -2278,29 +2167,28 @@ res = 1000  # meters
 
 # Model list
 models = [
-    "relax_1st_cycle_E3_v4.21",
-    "relax_2nd_cycle_E3_v4.21",
-    "relax_3rd_cycle_E3_v4.21",
-    "relax_4th_cycle_E3_v4.21",
-    "relax_5th_cycle_E3_v4.21",
-    "relax_6th_cycle_E3_v4.21",
-    "relax_7th_cycle_E3_v4.21",
-    "relax_8th_cycle_E3_v4.21",
-    "relax_9th_cycle_E3_v4.21",
-    "relax_10th_cycle_E3_v4.21",
-    "relax_11th_cycle_E3_v4.21"
-    ]
+    "relax_1st_cycle_calvingNG_false_calvingM_false_E3_v4.2",
+    "relax_2nd_cycle_E3_v4.2",
+    "relax_3rd_cycle_E3_v4.2",
+    "relax_4th_cycle_E3_v4.2",
+    "relax_5th_cycle_E3_v4.2",
+    "relax_6th_cycle_E3_v4.2",
+    "relax_7th_cycle_E3_v4.2",
+    "relax_8th_cycle_E3_v4.2",
+    "relax_9th_cycle_E3_v4.2",
+    "relax_10th_cycle_E3_v4.2",
+    "relax_11th_cycle_E3_v4.2",
+    "control_1st_relax_E3_v4.2",
+    "control_2nd_relax_E3_v4.2",
+    "control_3rd_relax_E3_v4.2",
+    "control_4th_relax_E3_v4.2",
+    "control_5th_relax_E3_v4.2",
+    "control_6th_relax_E3_v4.2",
+    "control_7th_relax_E3_v4.2",
+    "control_8th_relax_E3_v4.2",
+    "control_9th_relax_E3_v4.2"
+]
 
-#    "control_1st_relax_E3_v4.21",
-#    "control_2nd_relax_E3_v4.21",
-#    "control_3rd_relax_E3_v4.21",
-#    "control_4th_relax_E3_v4.21",
-#    "control_5th_relax_E3_v4.21",
-#    "control_6th_relax_E3_v4.21",
-#    "control_7th_relax_E3_v4.21",
-#    "control_8th_relax_E3_v4.21",
-#    "control_9th_relax_E3_v4.21"
-#]
 
 models = ["control_10th_relax_E3_v4.21"]
 
