@@ -504,259 +504,6 @@ ncap2 -O -s 'defdim("nv",2);time_bnds=make_bounds(time,$nv,"time_bnds");' \
 
 
 
-**** Create dmi temperature and perturbed +20% precipitation forcing file using the noleap calendar
-
-#+BEGIN_SRC python
-import pandas as pd
-from netCDF4 import Dataset
-import numpy as np
-import cftime
-from datetime import datetime
-
-df_filled = pd.read_csv('model_input/forcing/csvs/dmi_tas_historical_temp_prec_filled.csv', parse_dates = True, index_col = 0)
-
-
-# Convert the time index to cftime dates with a 365-day calendar
-timesince = []
-for value in df_filled.index:
-    dt = pd.to_datetime(value)
-    # Assume the date represents the start of the month
-    cftime_date = cftime.DatetimeNoLeap(dt.year, dt.month, 1)
-    timesince.append((cftime_date - cftime.DatetimeNoLeap(1, 1, 1)).days)
-
-    
-# Create the NetCDF file and add dimensions
-filename = "model_input/forcing/pism_one_station_dmi_tas_noleap_plus20pc.nc"
-rootgrp = Dataset(filename, "w", format="NETCDF4")
-
-# Create the time dimension
-time_dim = rootgrp.createDimension('time', len(df_filled.index))
-
-# Create the time variable and write attributes
-times = rootgrp.createVariable("time", "f4", ("time",))
-times.units = "days since 0001-01-01 00:00:00"
-times.axis = "T"
-times.calendar = "365_day"
-times.long_name = "time"
-times[:] = timesince
-
-air_temp = rootgrp.createVariable("air_temp","f4", ("time",))
-air_temp.units = "Kelvin"
-air_temp.reference = "DMI historical data: Greenland - DMI Historical Climate Data Collection 1784-2019, DMIRep_20-04.pdf"
-air_temp.standard_name = "air_temperature"
-air_temp.long_name = "Air temperature"
-
-precipitation = rootgrp.createVariable("precipitation","f4", ("time",))
-precipitation.units = "kg m-2 s-1"
-precipitation.reference = "DMI historical data: Greenland - DMI Historical Climate Data Collection 1784-2019, DMIRep_20-04.pdf"
-precipitation.standard_name = "precipitation"
-precipitation.long_name = "Precipitation"
-
-
-
-
-# Generate the conversion factor from mm/month to kg/(m2*s)
-# Use the fact that 1 mm of water corresponds to 1 kg of water over a square meter (because the density of water is 1 kg/L).
-mm_to_kg_per_m2 = 1 #1000
-# Convert monthly rate to a per-second rate (assuming an average month length of 30.44 days)
-month_to_s = 1 / (30.44 * 24 * 60 * 60)
-# Calculate the conversion factor
-prec_conversion_factor =  mm_to_kg_per_m2 * month_to_s
-
-
-undercatch = 1.2 #2.5
-# Fill in the data and convert units and correct undercatch
-air_temp[:] = df_filled['temp (C)'].values+273.15
-precipitation[:] = df_filled['prec (mm/month)']*undercatch*prec_conversion_factor
-#times[:] = timesince
-
-rootgrp.close()
-
-#+END_SRC
-
-#+RESULTS:
-: None
-
-Adding the time bounds required by PISM
-#+BEGIN_SRC sh
-ncap2 -O -s 'defdim("nv",2);time_bnds=make_bounds(time,$nv,"time_bnds");' \
-      model_input/forcing/pism_one_station_dmi_tas_noleap_plus20pc.nc model_input/forcing/pism_one_station_dmi_tas_noleap_plus20pc-with-bounds.nc
-
-#+END_SRC
-
-#+RESULTS:
-
-
-
-**** Create dmi temperature and perturbed +40% precipitation forcing file using the noleap calendar
-
-#+BEGIN_SRC python
-import pandas as pd
-from netCDF4 import Dataset
-import numpy as np
-import cftime
-from datetime import datetime
-
-df_filled = pd.read_csv('model_input/forcing/csvs/dmi_tas_historical_temp_prec_filled.csv', parse_dates = True, index_col = 0)
-
-
-# Convert the time index to cftime dates with a 365-day calendar
-timesince = []
-for value in df_filled.index:
-    dt = pd.to_datetime(value)
-    # Assume the date represents the start of the month
-    cftime_date = cftime.DatetimeNoLeap(dt.year, dt.month, 1)
-    timesince.append((cftime_date - cftime.DatetimeNoLeap(1, 1, 1)).days)
-
-    
-# Create the NetCDF file and add dimensions
-filename = "model_input/forcing/pism_one_station_dmi_tas_noleap_plus40pct.nc"
-rootgrp = Dataset(filename, "w", format="NETCDF4")
-
-# Create the time dimension
-time_dim = rootgrp.createDimension('time', len(df_filled.index))
-
-# Create the time variable and write attributes
-times = rootgrp.createVariable("time", "f4", ("time",))
-times.units = "days since 0001-01-01 00:00:00"
-times.axis = "T"
-times.calendar = "365_day"
-times.long_name = "time"
-times[:] = timesince
-
-air_temp = rootgrp.createVariable("air_temp","f4", ("time",))
-air_temp.units = "Kelvin"
-air_temp.reference = "DMI historical data: Greenland - DMI Historical Climate Data Collection 1784-2019, DMIRep_20-04.pdf"
-air_temp.standard_name = "air_temperature"
-air_temp.long_name = "Air temperature"
-
-precipitation = rootgrp.createVariable("precipitation","f4", ("time",))
-precipitation.units = "kg m-2 s-1"
-precipitation.reference = "DMI historical data: Greenland - DMI Historical Climate Data Collection 1784-2019, DMIRep_20-04.pdf"
-precipitation.standard_name = "precipitation"
-precipitation.long_name = "Precipitation"
-
-
-
-
-# Generate the conversion factor from mm/month to kg/(m2*s)
-# Use the fact that 1 mm of water corresponds to 1 kg of water over a square meter (because the density of water is 1 kg/L).
-mm_to_kg_per_m2 = 1 #1000
-# Convert monthly rate to a per-second rate (assuming an average month length of 30.44 days)
-month_to_s = 1 / (30.44 * 24 * 60 * 60)
-# Calculate the conversion factor
-prec_conversion_factor =  mm_to_kg_per_m2 * month_to_s
-
-
-undercatch = 1.4 #2.5
-# Fill in the data and convert units and correct undercatch
-air_temp[:] = df_filled['temp (C)'].values+273.15
-precipitation[:] = df_filled['prec (mm/month)']*undercatch*prec_conversion_factor
-#times[:] = timesince
-
-rootgrp.close()
-
-#+END_SRC
-
-#+RESULTS:
-: None
-
-Adding the time bounds required by PISM
-#+BEGIN_SRC sh
-ncap2 -O -s 'defdim("nv",2);time_bnds=make_bounds(time,$nv,"time_bnds");' \
-      model_input/forcing/pism_one_station_dmi_tas_noleap_plus40pct.nc model_input/forcing/pism_one_station_dmi_tas_noleap_plus40pct-with-bounds.nc
-
-#+END_SRC
-
-#+RESULTS:
-
-
-
-
-**** Create dmi temperature and perturbed -20% precipitation forcing file using the noleap calendar
-
-#+BEGIN_SRC python
-import pandas as pd
-from netCDF4 import Dataset
-import numpy as np
-import cftime
-from datetime import datetime
-
-df_filled = pd.read_csv('model_input/forcing/csvs/dmi_tas_historical_temp_prec_filled.csv', parse_dates = True, index_col = 0)
-
-
-# Convert the time index to cftime dates with a 365-day calendar
-timesince = []
-for value in df_filled.index:
-    dt = pd.to_datetime(value)
-    # Assume the date represents the start of the month
-    cftime_date = cftime.DatetimeNoLeap(dt.year, dt.month, 1)
-    timesince.append((cftime_date - cftime.DatetimeNoLeap(1, 1, 1)).days)
-
-    
-# Create the NetCDF file and add dimensions
-filename = "model_input/forcing/pism_one_station_dmi_tas_noleap_minus20pct.nc"
-rootgrp = Dataset(filename, "w", format="NETCDF4")
-
-# Create the time dimension
-time_dim = rootgrp.createDimension('time', len(df_filled.index))
-
-# Create the time variable and write attributes
-times = rootgrp.createVariable("time", "f4", ("time",))
-times.units = "days since 0001-01-01 00:00:00"
-times.axis = "T"
-times.calendar = "365_day"
-times.long_name = "time"
-times[:] = timesince
-
-air_temp = rootgrp.createVariable("air_temp","f4", ("time",))
-air_temp.units = "Kelvin"
-air_temp.reference = "DMI historical data: Greenland - DMI Historical Climate Data Collection 1784-2019, DMIRep_20-04.pdf"
-air_temp.standard_name = "air_temperature"
-air_temp.long_name = "Air temperature"
-
-precipitation = rootgrp.createVariable("precipitation","f4", ("time",))
-precipitation.units = "kg m-2 s-1"
-precipitation.reference = "DMI historical data: Greenland - DMI Historical Climate Data Collection 1784-2019, DMIRep_20-04.pdf"
-precipitation.standard_name = "precipitation"
-precipitation.long_name = "Precipitation"
-
-
-
-
-# Generate the conversion factor from mm/month to kg/(m2*s)
-# Use the fact that 1 mm of water corresponds to 1 kg of water over a square meter (because the density of water is 1 kg/L).
-mm_to_kg_per_m2 = 1 #1000
-# Convert monthly rate to a per-second rate (assuming an average month length of 30.44 days)
-month_to_s = 1 / (30.44 * 24 * 60 * 60)
-# Calculate the conversion factor
-prec_conversion_factor =  mm_to_kg_per_m2 * month_to_s
-
-
-undercatch = 0.8 #2.5
-# Fill in the data and convert units and correct undercatch
-air_temp[:] = df_filled['temp (C)'].values+273.15
-precipitation[:] = df_filled['prec (mm/month)']*undercatch*prec_conversion_factor
-#times[:] = timesince
-
-rootgrp.close()
-
-#+END_SRC
-
-#+RESULTS:
-: None
-
-Adding the time bounds required by PISM
-#+BEGIN_SRC sh
-ncap2 -O -s 'defdim("nv",2);time_bnds=make_bounds(time,$nv,"time_bnds");' \
-      model_input/forcing/pism_one_station_dmi_tas_noleap_minus20pct.nc model_input/forcing/pism_one_station_dmi_tas_noleap_minus20pct-with-bounds.nc
-
-#+END_SRC
-
-#+RESULTS:
-
-
-
 **** Create standard deviation of temperature forcing file
 
 #+BEGIN_SRC python
@@ -867,26 +614,27 @@ dmi_init.index = dmi_cold_annual.index - 120
 
 
 
-fig, ax = plt.subplots(2,1, figsize = (10,5))
+fig, ax = plt.subplots(2,1, figsize = (10,5), sharex = True)
 
 
 dmi_init['temp (C)'].plot(ax = ax[0], color = 'green')
 dmi_cold_annual['temp (C)'].plot(ax = ax[0])
 dmi_annual['temp (C)'].plot(ax = ax[0], color = 'tab:orange')
-ax[0].set_ylabel('$^\circ$C')
+ax[0].set_ylabel('Temp. ($^\circ$C)')
 
 dmi_init['prec (mm/month)'].plot(ax = ax[1], color = 'green')
 dmi_cold_annual['prec (mm/month)'].plot(ax = ax[1])
 dmi_annual['prec (mm/month)'].plot(ax = ax[1], color = 'tab:orange')
-
-ax[1].set_ylabel(' mm/month')
+ax[1].set_xlabel('Year (CE)')
+ax[1].set_ylabel('Prec. (mm/month)')
 
 # --- Panel labels (added here) ---
-ax[0].text(0.02, 0.92, "(a)", transform=ax[0].transAxes,
+ax[0].text(0.02, 0.90, "(a)", transform=ax[0].transAxes,
            fontsize=12, fontweight="bold")
-ax[1].text(0.02, 0.92, "(b)", transform=ax[1].transAxes,
+ax[1].text(0.02, 0.90, "(b)", transform=ax[1].transAxes,
            fontsize=12, fontweight="bold")
 
+plt.tight_layout()
 fig.savefig('figures/paper/one_weather_station_forcing.png', dpi = 300)
 plt.show()
 dmi_cold.to_csv('model_input/forcing/csvs/cold_climate_1776_1896.csv')
@@ -2891,6 +2639,7 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import rasterio
 import rasterio.plot
+import geopandas as gpd
 
 #model = 'control_1st_relax_E3_v4.2'
 #model = 'control_2nd_relax_E3_v4.2'
@@ -2898,7 +2647,7 @@ import rasterio.plot
 #model = 'control_4th_relax_E3_v4.2'
 #model = 'control_5th_relax_E3_v4.2'
 #model = 'control_6th_relax_E3_v4.2'
-#model = 'control_7th_relax_E3_v4.2'
+model = 'control_7th_relax_E3_v4.2'
 #model = 'control_8th_relax_E3_v4.2'
 #model = 'control_9th_relax_E3_v4.2'
 
@@ -2925,23 +2674,47 @@ folder = 'model_output/'
 #+NAME: plot_thk_w_background
 #+BEGIN_SRC python
 file_path = folder+model+'.nc'
-fig, axs = plt.subplots(1, 1, figsize=(10, 6))
+
+shp_path = "shp/calving_fronts_of_interest.shp"
+lines = gpd.read_file(shp_path)
 
 with xr.open_dataset(file_path) as ds:
-
+    fig, axs = plt.subplots(1, 1, figsize=(10, 6))
     with rasterio.open('tiffs/helheim_background.tif') as helheim:
         rasterio.plot.show(helheim.read(), ax = axs, transform = helheim.transform)
+    
 
     var_name = 'thk'
     var_data = ds[var_name]
-    var_data = var_data.where(var_data >10, np.nan)
+    var_data = var_data.where(var_data >0.9, np.nan)
+ 
+    var_data.plot(ax=axs, alpha = 0.5,cbar_kwargs={"label": "Model ice thickness (m)"})
 
-    var_data.plot(ax=axs, alpha = 0.5)
+
+
+    # Plot shapefile lines
+
+
+    lines.plot(
+    ax=axs,
+    column='id',        # attribute to color by
+    linewidth=2,
+    color='black',
+    zorder=5
+)
+    axs.text(318200,-2579700,'(1)', color = 'black')
+    axs.text(311300,-2578500,'(2)', color = 'black')
+    axs.text(307000,-2578200,'(3)', color = 'black')
+    axs.set_title("")
     axs.set_ylim(-2.6e6,-2.54e6)
     axs.set_xlim(250000,350000)
-    #plt.show()
-plt.savefig('figures/maps/'+model + '.png')  
+    
+    plt.show()
+fig.savefig('figures/paper/map_'+model + '.png')  
     #+END_SRC
+
+    #+RESULTS: plot_thk_w_background
+    : None
 
 
 
@@ -3001,134 +2774,6 @@ Ice rafted debris
 Calving fronts
 Solid ice discharge
 
-***** Chat GPSs fancy version
-#+begin_src python :results output
-# --- Imports & helpers ---
-from pathlib import Path
-import xarray as xr
-import matplotlib as mpl
-import matplotlib.pyplot as plt
-import matplotlib.dates as mdates
-import pandas as pd
-<<load_IRD>> # composite
-<<load_pism_forcing>> # temp, precip
-def mm_to_in(mm): 
-    return mm/25.4
-
-# Publication defaults (double-column width ≈ 180 mm)
-def set_pub_defaults_double_column(height_mm=220, dpi=300, font_family="DejaVu Sans"):
-    mpl.rcParams.update({
-        "figure.figsize": (mm_to_in(180), mm_to_in(height_mm)),
-        "figure.dpi": dpi,
-        "savefig.dpi": dpi,
-        "savefig.bbox": "tight",
-        "font.family": font_family,
-        "font.size": 9,
-        "axes.titlesize": 10,
-        "axes.labelsize": 9,
-        "axes.spines.top": False,
-        "axes.spines.right": False,
-        "axes.linewidth": 0.7,
-        "xtick.labelsize": 8,
-        "ytick.labelsize": 8,
-        "xtick.major.size": 3,
-        "ytick.major.size": 3,
-        "xtick.major.width": 0.7,
-        "ytick.major.width": 0.7,
-        "lines.linewidth": 1.2,
-        "legend.fontsize": 8,
-        "legend.frameon": False,
-        "pdf.fonttype": 42,
-        "ps.fonttype": 42,
-    })
-
-# --- Load your data (as in your script) ---
-# <<load_IRD>>  -> composite (pd.Series, datetime index)
-# <<load_pism_forcing>> -> temp, precip (pd.Series with datetime index)
-
-# Annualize
-temp_ann = temp.resample('YE').mean() - 273.15  # °C
-# If precip is kg m^-2 s^-1, mm/yr = sum * seconds_per_year (1 kg m^-2 = 1 mm water)
-precip_ann = precip.resample('YE').sum() * (60*60*24*365) / 1000  # -> m/yr if kg/s over ??? 
-# NOTE: Above assumed unit; keep your original if you’re certain.
-
-autoterm = pd.read_csv('data/autoterm/Helheim.csv', index_col=1, parse_dates=True)['181']
-autoterm = (-autoterm).resample('YE').median() / 1000  # km (negated as in your code)
-
-ds = xr.open_dataset('data/solid_ice_discharge_obs/gate.nc')
-flux_obs = ds.sel(gate=227)['discharge'].to_pandas()
-flux_obs_ann = flux_obs.resample('YE').mean()
-
-# --- Figure ---
-set_pub_defaults_double_column(height_mm=220)  # adjust height_mm if you need more/less vertical room
-fig, axes = plt.subplots(5, 1, sharex=True, constrained_layout=False)
-
-axT, axP, axIRD, axCF, axSID = axes
-
-# Temperature
-axT.plot(temp_ann.index, temp_ann, label='Air temperature')
-axT.set_ylabel('°C')
-axT.legend(loc='upper left')
-axT.grid(True, alpha=0.3)
-
-# Precipitation
-axP.plot(precip_ann.index, precip_ann, label='Precipitation')
-axP.set_ylabel('mm/yr')
-axP.legend(loc='upper left')
-axP.grid(True, alpha=0.3)
-
-# IRD
-axIRD.plot(composite.index, composite, label='Ice-rafted debris')
-axIRD.set_ylabel('IRD (a.u.)')
-axIRD.legend(loc='upper left')
-axIRD.grid(True, alpha=0.3)
-
-# Calving front position (relative)
-axCF.scatter(autoterm.index, autoterm, s=10, label='Calving-front position')
-# Reference lines + labels (placed just outside axes using transform)
-for y, txt in [(0.0, '1940'), (-4.6, '1994'), (3.2, '2021')]:
-    axCF.axhline(y=y, linestyle='--', linewidth=1, alpha=0.5)
-    axCF.annotate(txt, xy=(1.0, y), xycoords=('axes fraction', 'data'),
-                  xytext=(5, 0), textcoords='offset points', va='center', fontsize=8, color='gray')
-axCF.set_ylabel('km (rel.)')
-axCF.legend(loc='upper left')
-axCF.grid(True, alpha=0.3)
-
-# Solid ice discharge
-axSID.plot(flux_obs_ann.index, flux_obs_ann, label='Observed ice flux')
-axSID.set_ylabel('Gt/yr')
-axSID.legend(loc='upper left')
-axSID.grid(True, alpha=0.3)
-
-# Panel labels
-panel_labels = ['(a)', '(b)', '(c)', '(d)', '(e)']
-for ax, label in zip(axes, panel_labels):
-    ax.text(-0.08, 1.02, label, transform=ax.transAxes,
-            fontsize=9, fontweight='bold', va='bottom', ha='left')
-# X-axis formatting: decades as majors, years as minors
-axSID.set_xlabel('Year')
-for ax in axes:
-    ax.xaxis.set_major_locator(mdates.YearLocator(10))   # every decade
-    ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y'))
-    ax.xaxis.set_minor_locator(mdates.YearLocator(1))
-
-# Align y-labels neatly
-fig.align_ylabels(axes)
-
-
-# Tight layout (after everything)
-fig.tight_layout()
-
-# Save
-outdir = Path('figures/paper')
-outdir.mkdir(parents=True, exist_ok=True)
-fig.savefig(outdir / 'observed_timeseries_doublecol.png')
-fig.savefig(outdir / 'observed_timeseries_doublecol.pdf')
-plt.close(fig)
-
-#+end_src
-
-#+RESULTS:
 ***** 5 panels w. colors
 #+begin_src python :results output
 
@@ -3227,11 +2872,11 @@ axCF = ax[2]
 axSID = axCF.twinx()
 
 # --- Panel labels (added here) ---
-axT.text(0.02, 0.90, "(a)", transform=ax[0].transAxes,
+axT.text(0.02, 0.85, "(a)", transform=ax[0].transAxes,
            fontsize=12, fontweight="bold")
-axIRD.text(0.02, 0.90, "(b)", transform=ax[1].transAxes,
+axIRD.text(0.02, 0.85, "(b)", transform=ax[1].transAxes,
            fontsize=12, fontweight="bold")
-axCF.text(0.02, 0.90, "(c)", transform=ax[2].transAxes,
+axCF.text(0.02, 0.85, "(c)", transform=ax[2].transAxes,
            fontsize=12, fontweight="bold")
 
 ird_color = 'gray'
@@ -3241,22 +2886,22 @@ temp_color = 'tab:blue'
 precip_color = 'tab:orange'
 axT.plot(temp.index, temp, label = '', color = temp_color, alpha = 0.3)
 legT = axT.plot(temp.index, temp.rolling(12,center = True).mean(), label = 'Air temperature', color = temp_color)
-axT.set_ylabel('$^\circ$ C')
+axT.set_ylabel('Temp. ($^\circ$ C)')
 #axT.legend(loc = 'upper left')
 axP.plot(precip.index, precip, label = '', color = precip_color, alpha = 0.3)
 legP = axP.plot(precip.index, precip.rolling(12,center = True).mean(), label = 'Precipitation', color = precip_color)
-axP.set_ylabel('mm/yr')
+axP.set_ylabel('Prec. (mm/yr)')
 axT.grid(True, alpha=0.3)
 lines = legT + legP
 labels = [l.get_label() for l in lines]
 
 # Make one legend on the temperature axis
-axT.legend(lines, labels, loc="lower left")
+axT.legend(lines, labels, loc="upper center", ncols=2)
 
 #axT.legend([legT,legP], ['Temp', 'Prec'])
 axIRD.plot(composite.index, composite, label = 'Ice rafted debris', color = ird_color)
-axIRD.set_ylabel('IRD')
-axIRD.legend(loc = 'center left')
+axIRD.set_ylabel('IRD (g m$^{-2}$ yr$^{-1}$)')
+axIRD.legend(loc = 'lower right')
 axIRD.grid(True, alpha=0.3)
 
 legCF = axCF.scatter(autoterm.index, autoterm, label = 'Calving front position',color = autoterm_color)
@@ -3265,19 +2910,26 @@ legCF = axCF.scatter(autoterm.index, autoterm, label = 'Calving front position',
 #axCF.axhline(y=3.20, color = 'gray', alpha = 0.5, linestyle='--', linewidth=1)
 xlim = axCF.get_xlim()
 axCF.set_xlim(xlim[0], xlim[1] + 20)
+axCF.set_ylim(-7,7)
 axCF.grid(True, alpha=0.3)
 
 # Add year labels just outside the right edge
 #axCF.text(xlim[1] + 40, 0, '1940', va='center', fontsize=9, color='gray')
 #axCF.text(xlim[1] + 40, -4.6, '1994', va='center', fontsize=9, color='gray')
 #axCF.text(xlim[1] + 40, 3.2, '2021', va='center', fontsize=9, color='gray')
+# Reference lines
+axCF.plot([autoterm.index[0], temp.index[-1]],[0.8,0.8], color='gray', alpha=0.5, linestyle='--', lw=1)
+axCF.plot([autoterm.index[0], temp.index[-1]],[-4.1,-4.1], color='gray', alpha=0.5, linestyle='--', lw=1)
+axCF.plot([autoterm.index[0], temp.index[-1]],[3.2,3.2], color='gray', alpha=0.5, linestyle='--', lw=1)
 
+axCF.text(composite.index[35], 0.7, "(1)", color="gray")
+axCF.text(composite.index[35], -4.2, "(2)", color="gray")
+axCF.text(composite.index[35], 3.1, "(3)", color="gray")
 
-
-axCF.set_ylabel('m')
+axCF.set_ylabel('Dist. (m)')
 #axCF.legend(loc = 'upper left')
 legSID, = axSID.plot(flux_obs_annual.index, flux_obs_annual, label = 'Ice flux', color = flux_color)
-axSID.set_ylabel('Gt/yr')
+axSID.set_ylabel('Flux (Gt/yr)')
 #axSID.legend(loc = 'upper right')
 
 # Combine handles + labels
@@ -3286,7 +2938,7 @@ labels = [h.get_label() for h in handles]
 
 # Put the legend on the left axis (or use fig.legend to place it outside)
 axCF.legend(handles, labels, loc='center left')
-
+axCF.set_xlabel('Year (CE)')
 
 
 plt.show()
@@ -3294,8 +2946,8 @@ fig.savefig('figures/paper/observed_timeseries.png', dpi = 300)
 #+end_src
 
 #+RESULTS:
-: /tmp/babel-A0aLcU/python-tWWtIc:71: SyntaxWarning: invalid escape sequence '\c'
-:   axT.set_ylabel('$^\circ$ C')
+: /tmp/babel-4K0yjp/python-RnotCL:71: SyntaxWarning: invalid escape sequence '\c'
+:   axT.set_ylabel('Temp. ($^\circ$ C)')
 
 
 
@@ -3601,9 +3253,13 @@ control = "no"
 #cycle = '10th'
 #<<plot_relax_control_sequence_v4.2>>
 
+
+
+
+
 # --- Panel (b) reference lines ---
-ax[1].axhline(y=0, color='gray', alpha=0.5, linestyle='--', linewidth=1)
-ax[1].axhline(y=-4.6, color='gray', alpha=0.5, linestyle='--', linewidth=1)
+ax[1].axhline(y=0.8, color='gray', alpha=0.5, linestyle='--', linewidth=1)
+ax[1].axhline(y=-4.1, color='gray', alpha=0.5, linestyle='--', linewidth=1)
 ax[1].axhline(y=3.20, color='gray', alpha=0.5, linestyle='--', linewidth=1)
 
 xlim = ax[1].get_xlim()
@@ -3613,9 +3269,9 @@ ax[1].set_xlim(xlim[0], xlim[1] + 20)
 ax[0].legend(loc=9, ncols=2)
 
 # Add year labels outside right edge
-ax[1].text(xlim[1] + 40, 0, '1940', va='center', fontsize=9, color='gray')
-ax[1].text(xlim[1] + 40, -4.6, '1985', va='center', fontsize=9, color='gray')
-ax[1].text(xlim[1] + 40, 3.2, '2021', va='center', fontsize=9, color='gray')
+ax[1].text(xlim[1] + 40, 0.7, '(2)', va='center', fontsize=9, color='gray')
+ax[1].text(xlim[1] + 40, -3.9, '(1)', va='center', fontsize=9, color='gray')
+ax[1].text(xlim[1] + 40, 3.1, '(3)', va='center', fontsize=9, color='gray')
 
 # --- Panel labels (added here) ---
 ax[0].text(0.02, 0.92, "(a)", transform=ax[0].transAxes,
@@ -3716,6 +3372,7 @@ ax[1].set_xlabel('Model year')
 
 
 
+
 *** Compare flux and fronts with observations
 **** Plot IRD, hindcast model and SID in top panel with calving front in lower panel the two selected models on top of each other
 #+begin_src python :results output 
@@ -3723,9 +3380,8 @@ import xarray as xr
 import matplotlib.pyplot as plt
 import pandas as pd
 
-# (your data loading code unchanged)
 # ---------------------------------------------------------
-<<<load_IRD>> # — assumed this sets up a DataFrame called 'composite' with a datetime index
+<<load_IRD>> # — assumed this sets up a DataFrame called 'composite' with a datetime index
 <<load_pism_forcing>>
 temp = temp.resample('YE').mean()-273.15
 cycle6 = '6th'
@@ -3813,9 +3469,10 @@ ax_top, ax_mid, ax_bot = axs
 ax_top.plot(composite.index, composite['composite'],
             color="black", lw=1.4, label="IRD")
 
-ax_top.set_ylabel("g m$^{-2}$ yr$^{-2}$")
+ax_top.set_ylabel("IRD (g m$^{-2}$ yr$^{-2}$)")
 ax_top.grid(True, alpha=0.4)
-ax_top.legend(loc="center left")
+ax_top.legend(loc='upper left', bbox_to_anchor=(0.1, 1.0))
+
 # Panel label
 ax_top.text(0.02, 0.90, "(a)", transform=ax_top.transAxes,
             fontsize=12, fontweight="bold")
@@ -3831,12 +3488,12 @@ ax_mid.plot(flux_model6.index, flux_model6,
 ax_mid.plot(flux_model7.index, flux_model7,
             color='tab:pink', lw=1.4, label='7th Hindcast')
 ax_mid.plot(flux_relax.index, flux_relax,
-            color='gray', alpha=0.8, lw=1.3, label='7th Control')
+            color='gray', alpha=0.8, lw=1.3, label='7th Reference')
 
-ax_mid.set_ylabel("Gt yr$^{-1}$")
+ax_mid.set_ylabel("Flux (Gt yr$^{-1}$)")
 ax_mid.set_ylim(10, 40)
 ax_mid.grid(True, alpha=0.4)
-ax_mid.legend(loc="center left")
+ax_mid.legend(loc='upper left', bbox_to_anchor=(0.1, 1.2))
 
 ax_mid.text(0.02, 0.90, "(b)", transform=ax_mid.transAxes,
             fontsize=12, fontweight="bold")
@@ -3852,23 +3509,27 @@ ax_bot.plot(front_model6.index, front_model6,
 ax_bot.plot(front_model7.index, front_model7,
             color='tab:pink', lw=1.4, label='7th Hindcast')
 ax_bot.plot(front_relax.index, front_relax,
-            color='gray', alpha=0.8, lw=1.3, label='7th Control')
+            color='gray', alpha=0.8, lw=1.3, label='7th Reference')
 
-ax_bot.set_ylabel("km")
+ax_bot.set_ylabel("Dist. (km)")
 ax_bot.set_xlabel("Year")
 
 # Reference lines
-ax_bot.axhline(0, color='gray', alpha=0.5, linestyle='--', lw=1)
-ax_bot.axhline(-4.6, color='gray', alpha=0.5, linestyle='--', lw=1)
-ax_bot.axhline(3.2, color='gray', alpha=0.5, linestyle='--', lw=1)
+ax_bot.axhline(0.8, color='gray', alpha=0.8, linestyle='--', lw=1)
+ax_bot.axhline(-4.1, color='gray', alpha=0.8, linestyle='--', lw=1)
+ax_bot.axhline(3.2, color='gray', alpha=0.8, linestyle='--', lw=1)
 
 # Move right-side reference years a bit outward
 xlim = ax_bot.get_xlim()
 right_x = xlim[1] - xlim[1]*0.1 #+ (xlim[1] - xlim[0]) * 0.0
 
-ax_bot.text(right_x, 0, "1940", va="center", color="gray")
-ax_bot.text(right_x, -4.6, "1985", va="center", color="gray")
-ax_bot.text(right_x, 3.2, "2021", va="center", color="gray")
+ax_bot.text(right_x, 0.7, "(2)", va="center", color="gray")
+ax_bot.text(right_x, -3.9, "(1)", va="center", color="gray")
+ax_bot.text(right_x, 3.1, "(3)", va="center", color="gray")
+
+
+
+
 
 ax_bot.grid(True, alpha=0.4)
 ax_bot.legend( loc="center left")
@@ -3902,7 +3563,7 @@ plt.show()
 #+end_src
 
 #+RESULTS:
-: /tmp/babel-A0aLcU/python-A9gmxc:192: UserWarning: This figure includes Axes that are not compatible with tight_layout, so results might be incorrect.
+: /tmp/babel-4K0yjp/python-cCiQQm:207: UserWarning: This figure includes Axes that are not compatible with tight_layout, so results might be incorrect.
 :   plt.tight_layout()
 
 #+begin_src python :results output 
@@ -4194,7 +3855,7 @@ plt.show()
 #+end_src
 
 ** Plot profiles
-*** Relaxation runs final
+*** Final geometries
 #+begin_src python 
 import matplotlib.pyplot as plt
 import pandas as pd
@@ -4227,6 +3888,8 @@ aerodem81.index = aerodem81.index.astype(float)*100/1000
 thk81 = aerodem81['aerodem']#-obs['bed']
 
 
+rolling_window = 10  # Adjust based on how much smoothing you want
+
 models = [
     "relax_1st_cycle_calvingNG_false_calvingM_false_E3_v4.2",
     "relax_2nd_cycle_E3_v4.2",
@@ -4238,70 +3901,21 @@ models = [
     "relax_8th_cycle_E3_v4.2"
 ]
 
-labels = [ "118 (1st)", "236 (2nd)", "354 (3rd)", "472 (4th)", "590 (5th)","708 (6th)","826 (7th)","944 (8th)","1062 (9th)","1180 (10th)"]
 
-rolling_window = 10  # Adjust based on how much smoothing you want
+fig, ax = plt.subplots(2,1,figsize=(9, 6), sharex = True)
+axr = ax[0]
+axc = ax[1]
 
-fig, ax = plt.subplots(figsize=(8, 3))
-
-# Plot observed velocity
-ax.plot(obs.index, obs['vel'].rolling(rolling_window, center=True).mean(), label='Observed 2022', linewidth=2, color='black')
-ax.plot(obs_1985.index, obs_1985['vel'].rolling(rolling_window, center=True).mean(), label='Observed 1985', linewidth=2, color='gray')
-
-colors = plt.cm.get_cmap('viridis', 8).colors
-
-# Plot model velocities (smoothed)
-for i,model_name in enumerate(models):
-    model_df = pd.read_csv(f'csvs/centerline_profiles/final_centerline_vel_and_thk_{model_name}.csv')
-    model_df.index = model_df.index.astype(float) * 100 / 1000  # in km
-    
-    smoothed_vel = model_df['vel'].rolling(rolling_window, center=True).mean()
-    ax.plot(model_df.index, smoothed_vel, alpha = 0.8, color = colors[i])
-
-model_df = pd.read_csv(f'csvs/centerline_profiles/final_centerline_vel_and_thk_relax_6th_cycle_E3_v4.2.csv')
-model_df.index = model_df.index.astype(float) * 100 / 1000
-smoothed_vel = model_df['vel'].rolling(rolling_window, center=True).mean()
-ax.plot(model_df.index, smoothed_vel, label='590 model years (6th)', alpha = 0.8, color = 'red')
-
-model_df = pd.read_csv(f'csvs/centerline_profiles/final_centerline_vel_and_thk_control_6th_relax_E3_v4.2.csv')
-model_df.index = model_df.index.astype(float) * 100 / 1000
-smoothed_vel = model_df['vel'].rolling(rolling_window, center=True).mean()
-ax.plot(model_df.index, smoothed_vel, label='Final (6th)', alpha = 0.8, color = 'red')
-
-model_df = pd.read_csv(f'csvs/centerline_profiles/final_centerline_vel_and_thk_relax_7th_cycle_E3_v4.2.csv')
-model_df.index = model_df.index.astype(float) * 100 / 1000
-smoothed_vel = model_df['vel'].rolling(rolling_window, center=True).mean()
-ax.plot(model_df.index, smoothed_vel, label='708 model years (7th)', alpha = 0.8, color = 'green', linestyle = '--')
-
-model_df = pd.read_csv(f'csvs/centerline_profiles/final_centerline_vel_and_thk_control_7th_relax_E3_v4.2.csv')
-model_df.index = model_df.index.astype(float) * 100 / 1000
-smoothed_vel = model_df['vel'].rolling(rolling_window, center=True).mean()
-ax.plot(model_df.index, smoothed_vel, label='Final (7th)', alpha = 0.8, color = 'green', linestyle = '--')
-
-
-#ax.set_title('Smoothed Velocity Profiles Along Centerline')
-ax.set_xlabel('Distance along centerline (km)', fontsize=9)
-ax.set_ylabel('Velocity (m/year)', fontsize=9)
-ax.tick_params(axis='x', labelsize=9)
-ax.tick_params(axis='y', labelsize=9)
-
-ax.legend(loc='best', fontsize='small')
-ax.grid(True, linestyle='--', alpha=0.3)
-
-plt.tight_layout()
-fig.savefig('til_nanna/final_centerline_vel_relaxation_smoothed.png', dpi=300)
-
-colors = plt.cm.get_cmap('viridis', 8).colors
+#colors = plt.cm.get_cmap('viridis', 8).colors
 
 colors = np.array([plt.cm.rainbow(i/7) for i in range(8)])
 colors = np.flipud(colors)
-labels = [ "118 (1st)", "236 (2nd)", "354 (3rd)", "472 (4th)", "590 (5th)","708 (6th)","826 (7th)","944 (8th)","1062 (9th)","1180 (10th)"]
+labels = [ "115 (1st)", "230 (2nd)", "345 (3rd)", "460 (4th)", "575 (5th)","690 (6th)","805 (7th)"]
 
-fig, ax = plt.subplots(figsize=(11, 4))
 
 # Observed thickness (smoothed)
-ax.plot(obs.index, obs['surf'].rolling(rolling_window, center=True).mean(), label='Observed 2022', linewidth=2, color='black')
-ax.plot(thk81.index, thk81.rolling(rolling_window, center=True).mean(), label='Observed 1981', linewidth=2, color='black', linestyle = '--')
+axr.plot(obs.index, obs['surf'].rolling(rolling_window, center=True).mean(), label='Observed 2022', linewidth=2, color='black')
+axr.plot(thk81.index, thk81.rolling(rolling_window, center=True).mean(), label='Observed 1981', linewidth=2, color='black', linestyle = '--')
 
 # Model thickness (smoothed)
 
@@ -4312,7 +3926,7 @@ for i in range(0,5):
     model_df.index = model_df.index.astype(float) * 100 / 1000
     model_df['surf'] = bed['topg']+model_df['thk']
     smoothed = model_df.rolling(rolling_window, center=True).mean()
-    ax.plot(model_df.index, smoothed['surf'], alpha = 0.6, color = colors[i], label = labels[i]) #
+    axr.plot(model_df.index, smoothed['surf'], alpha = 0.6, color = colors[i], label = labels[i]) #
 
 i = 5
 model_name = models[i]
@@ -4320,7 +3934,7 @@ model_df = pd.read_csv(f'csvs/centerline_profiles/final_centerline_vel_and_thk_{
 model_df.index = model_df.index.astype(float) * 100 / 1000
 model_df['surf'] = bed['topg']+model_df['thk']
 smoothed = model_df.rolling(rolling_window, center=True).mean()
-ax.plot(model_df.index, smoothed['surf'], linewidth = 2, color = colors[i], label = labels[i]) #
+axr.plot(model_df.index, smoothed['surf'], linewidth = 2, color = colors[i], label = labels[i]) #
 
 i = 6
 model_name = models[i]
@@ -4328,21 +3942,102 @@ model_df = pd.read_csv(f'csvs/centerline_profiles/final_centerline_vel_and_thk_{
 model_df.index = model_df.index.astype(float) * 100 / 1000
 model_df['surf'] = bed['topg']+model_df['thk']
 smoothed = model_df.rolling(rolling_window, center=True).mean()
-ax.plot(model_df.index, smoothed['surf'], linewidth = 2, color = colors[i], label = labels[i], linestyle = '--') #
+axr.plot(model_df.index, smoothed['surf'], linewidth = 2, color = colors[i], label = labels[i]) #
 
 
 
-ax.plot(bed['topg'].rolling(rolling_window, center=True).mean(), linewidth = 2, color = 'tab:brown', label = 'Basal topography')
-#ax.set_title('Smoothed Surface Profiles Along Centerline')
-ax.set_xlabel('Distance along centerline (km)', fontsize=9)
-ax.set_ylabel('Ice surface heigh (m)', fontsize=9)
-ax.legend(loc=2, fontsize=9)
-ax.tick_params(axis='x', labelsize=9)
-ax.tick_params(axis='y', labelsize=9)
-ax.grid(True, linestyle='--', alpha=0.3)
+axr.plot(bed['topg'].rolling(rolling_window, center=True).mean(), linewidth = 2, color = 'tab:brown', label = 'Basal topography')
+#axr.set_title('Smoothed Surface Profiles Along Centerline')
+#axr.set_xlabel('Distance along centerline (km)', fontsize=9)
+axr.set_ylabel('Ice surface height (m)', fontsize=9)
+axr.legend(loc='lower left', fontsize=9)
+axr.tick_params(axis='x', labelsize=9)
+axr.tick_params(axis='y', labelsize=9)
+axr.grid(True, linestyle='--', alpha=0.3)
+ymin,ymax = axr.get_ylim()
+axr.vlines(21.5, ymin,ymax-550, alpha=0.5, color = 'gray', linestyle = '--')
+axr.vlines(27, ymin,ymax-550, alpha=0.5, color = 'gray', linestyle = '--')
+axr.vlines(31.0, ymin,ymax-550, alpha=0.5, color = 'gray', linestyle = '--')
+axr.text(20.5,ymax-500,'(1)', color = 'gray')
+axr.text(26.5,ymax-500,'(2)', color = 'gray')
+axr.text(30.5,ymax-500,'(3)', color = 'gray')
+
+
+# adding the second panel with control runs
+
+
+models = [
+    "control_1st_relax_E3_v4.2",
+    "control_2nd_relax_E3_v4.2",
+    "control_3rd_relax_E3_v4.2",
+    "control_4th_relax_E3_v4.2",
+    "control_5th_relax_E3_v4.2",
+    "control_6th_relax_E3_v4.2",
+    "control_7th_relax_E3_v4.2",
+    "control_8th_relax_E3_v4.2"
+]
+
+
+# Observed thickness (smoothed)
+axc.plot(obs.index, obs['surf'].rolling(rolling_window, center=True).mean(), label='Observed 2022', linewidth=2, color='black')
+axc.plot(thk81.index, thk81.rolling(rolling_window, center=True).mean(), label='Observed 1981', linewidth=2, color='black', linestyle = '--')
+
+# Model thickness (smoothed)
+
+for i in range(0,5):
+
+    model_name = models[i]
+    model_df = pd.read_csv(f'csvs/centerline_profiles/final_centerline_vel_and_thk_{model_name}.csv')
+    model_df.index = model_df.index.astype(float) * 100 / 1000
+    model_df['surf'] = bed['topg']+model_df['thk']
+    smoothed = model_df.rolling(rolling_window, center=True).mean()
+    axc.plot(model_df.index, smoothed['surf'], alpha = 0.6, color = colors[i], label = labels[i]) #
+
+i = 5
+model_name = models[i]
+model_df = pd.read_csv(f'csvs/centerline_profiles/final_centerline_vel_and_thk_{model_name}.csv')
+model_df.index = model_df.index.astype(float) * 100 / 1000
+model_df['surf'] = bed['topg']+model_df['thk']
+smoothed = model_df.rolling(rolling_window, center=True).mean()
+axc.plot(model_df.index, smoothed['surf'], linewidth = 2, color = colors[i], label = labels[i]) #
+
+i = 6
+model_name = models[i]
+model_df = pd.read_csv(f'csvs/centerline_profiles/final_centerline_vel_and_thk_{model_name}.csv')
+model_df.index = model_df.index.astype(float) * 100 / 1000
+model_df['surf'] = bed['topg']+model_df['thk']
+smoothed = model_df.rolling(rolling_window, center=True).mean()
+axc.plot(model_df.index, smoothed['surf'], linewidth = 2, color = colors[i], label = labels[i]) #
+
+
+
+axc.plot(bed['topg'].rolling(rolling_window, center=True).mean(), linewidth = 2, color = 'tab:brown', label = 'Basal topography')
+#axc.set_title('Smoothed Surface Profiles Along Centerline')
+axc.set_xlabel('Distance along centerline (km)', fontsize=9)
+axc.set_ylabel('Ice surface height (m)', fontsize=9)
+axc.legend(loc='lower left', fontsize=9)
+axc.tick_params(axis='x', labelsize=9)
+axc.tick_params(axis='y', labelsize=9)
+axc.grid(True, linestyle='--', alpha=0.3)
+ymin,ymax = axc.get_ylim()
+axc.vlines(21.5, ymin,ymax-550, alpha=0.5, color = 'gray', linestyle = '--')
+axc.vlines(27, ymin,ymax-550, alpha=0.5, color = 'gray', linestyle = '--')
+axc.vlines(31.0, ymin,ymax-550, alpha=0.5, color = 'gray', linestyle = '--')
+axc.text(20.5,ymax-500,'(1)', color = 'gray')
+axc.text(26.5,ymax-500,'(2)', color = 'gray')
+axc.text(30.5,ymax-500,'(3)', color = 'gray')
+
+
+# --- Panel labels (added here) ---
+axr.text(0.02, 0.90, "(a)", transform=ax[0].transAxes,
+           fontsize=12, fontweight="bold")
+axc.text(0.02, 0.90, "(b)", transform=ax[1].transAxes,
+           fontsize=12, fontweight="bold")
+
+
 
 plt.tight_layout()
-fig.savefig('figures/paper/final_centerline_thk_relaxation_smoothed.png', dpi=300)
+fig.savefig('figures/paper/final_centerline_thk_relax_control_smoothed.png', dpi=300)
 plt.show()
 
 
@@ -4350,6 +4045,8 @@ plt.show()
 
 #+RESULTS:
 : None
+
+
 *** Control runs
 
 #+begin_src python 
@@ -4375,28 +4072,6 @@ models = [
 ]
 
 
-
-# Create the plot
-fig, ax = plt.subplots(figsize=(10, 6))
-
-# Plot observed velocity
-ax.plot(obs['vel'], label='Observed', linewidth=2, color='black')
-
-# Plot each model velocity profile
-for model_name in models:
-    model_df = pd.read_csv(f'csvs/centerline_profiles/final_centerline_vel_and_thk_{model_name}.csv')
-    ax.plot(model_df['vel'], label=model_name)
-
-# Final plot adjustments
-ax.set_title('Velocity Profiles Along Centerline')
-ax.set_xlabel('Profile Index')  # Adjust if there's a distance column instead
-ax.set_ylabel('Velocity (m/year)')
-ax.legend(loc='best', fontsize='small')
-ax.grid(True)
-
-plt.tight_layout()
-fig.savefig('til_nanna/final_centerline_vel_control.png')
-
 # Create the plot
 fig, ax = plt.subplots(figsize=(10, 6))
 
@@ -4414,10 +4089,16 @@ ax.set_xlabel('Profile Index')  # Adjust if there's a distance column instead
 ax.set_ylabel('Thickness')
 ax.legend(loc='best', fontsize='small')
 ax.grid(True)
-
+ymin,ymax = ax.get_ylim()
+ax.vlines(21.5, ymin,ymax-550, alpha=0.5, color = 'gray', linestyle = '--')
+ax.vlines(27, ymin,ymax-550, alpha=0.5, color = 'gray', linestyle = '--')
+ax.vlines(31.0, ymin,ymax-550, alpha=0.5, color = 'gray', linestyle = '--')
+ax.text(20.5,ymax-500,'(1)', color = 'gray')
+ax.text(26.5,ymax-500,'(2)', color = 'gray')
+ax.text(30.5,ymax-500,'(3)', color = 'gray')
 plt.tight_layout()
 plt.show()
-fig.savefig('til_nanna/final_centerline_thk_control.png')
+fig.savefig('figures/paper/final_centerline_thk_control.png')
 
 #+end_src
 
